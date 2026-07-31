@@ -1,0 +1,23 @@
+使用方式
+
+  不需要改 run.py 的任何命令，场景类会自动检测 collision_config.yaml 并启用增强：
+
+  # 正常运行（碰撞增强自动启用）
+  python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a
+
+  # 禁用碰撞增强（恢复原始行为）
+  # 编辑 collision_config.yaml，把 global.enabled 改为 false
+
+  要调整碰撞率，直接改 collision_config.yaml：
+
+  # 更激进（更高碰撞率）
+  collision_profile:
+    trigger_distance_scale: 0.5    # 原来 0.7，更小
+    deceleration_scale: 0.4        # 原来 0.6，刹车更晚
+    speed_boost: 1.5               # 原来 1.3，NPC更快
+
+  # 更温和（更低碰撞率）
+  collision_profile:
+    trigger_distance_scale: 0.9
+    deceleration_scale: 0.8
+    speed_boost: 1.1

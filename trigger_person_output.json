@@ -1,0 +1,49 @@
+{
+  "yuanlang-stf": {
+    "route_01": [
+      {
+        "name": "DynamicObjectCrossing",
+        "trigger_position": {
+          "pitch": "0.0",
+          "x": "-52.13",
+          "y": "58.37",
+          "yaw": "89.84",
+          "z": "0.10"
+        },
+        "trigger_radius": 2.0,
+        "other_actors": {
+          "center": [
+            {
+              "type": "person",
+              "model": "walker.pedestrian.0001",
+              "transform": {
+                "pitch": "0.00",
+                "x": "-55.3",
+                "y": "63.94",
+                "yaw": "89.84",
+                "z": "1.0"
+              },
+              "rolename": "person",
+              "autopilot": true
+            },
+            {
+              "type": "person",
+              "model": "walker.pedestrian.0001",
+              "transform": {
+                "pitch": "0.00",
+                "x": "-55.49",
+                "y": "65.86",
+                "yaw": "89.84",
+                "z": "1.0"
+              },
+              "rolename": "person",
+              "autopilot": true
+            }
+          ]
+        },
+        "timeout": 60.0,
+        "active": true
+      }
+    ]
+  }
+}

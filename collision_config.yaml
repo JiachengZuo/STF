@@ -1,0 +1,190 @@
+# ============================================================
+# Collision Rate Enhancement Configuration
+# ============================================================
+# This config enables aggressive NPC behavior to increase collision rates.
+# Inspired by safebenchAuto's tcp_collision_profile and genetic algorithm optimization.
+#
+# Key mechanisms:
+# 1. Shorter trigger distances → NPC reacts later, less time for ego to avoid
+# 2. Higher NPC speeds → More kinetic energy, harder to brake in time
+# 3. Tighter GA bounds → Optimized for collision-inducing initial states
+# 4. Reduced braking distances → Brakes applied closer to ego
+# ============================================================
+
+# ============================================================
+# Global settings
+# ============================================================
+global:
+  # Enable collision enhancement (set to false to disable all aggressive behavior)
+  enabled: true
+
+  # Genetic algorithm settings for optimizing dangerous NPC states
+  ga:
+    enabled: true
+    population_size: 30
+    generations: 30
+    mutation_rate: 0.13
+    crossover_rate: 0.7
+
+# ============================================================
+# NPC speed configuration (affects throttle values)
+# ============================================================
+npc_speed:
+  # Base throttle multiplier (default 1.0). Values > 1.0 make NPCs faster.
+  throttle_multiplier: 1.0
+
+  # Specific NPC speed overrides by scenario type
+  overrides:
+    # CarCrossScene (scenario 2c/2d/2e/5e) - cross traffic
+    car_cross:
+      throttle: 0.9       # Was 0.7 → higher speed = harder to dodge
+      trigger_distance: 12  # Was 10 → trigger closer to ego
+
+    # PedestrianCrossScene (scenario 3a/3b/5g) - pedestrian crossing
+    pedestrian:
+      speed: 3.5           # Was 2.5 → faster walkers = less time to react
+      trigger_distance: 12  # Was 10
+
+    # CarCutOutScene (scenario 4b) - cutting in
+    car_cut_out:
+      initial_throttle: 0.5    # Initial lane-change speed
+      merge_throttle: 0.6      # Post-merge speed
+      cut_out_delay: 0.8       # Seconds before cut-out (shorter = more aggressive)
+      trigger_distance: 14     # Was 12
+
+    # CarCutInScene (scenario 4a) - cutting in from behind
+    car_cut_in:
+      throttle: 0.8
+      trigger_distance: 14
+
+    # CarOncomingPassScene (scenario 4c) - oncoming passing
+    oncoming_pass:
+      throttle: 0.8
+      trigger_distance: 14
+
+    # CarStopandGoScene (scenario 4d) - stopping vehicle
+    stop_and_go:
+      brake_force: 0.6     # Stronger brake for sudden stop illusion
+      trigger_distance: 14
+
+    # CarCutOutandStaticScene (scenario 5c) - cut out then static
+    cut_out_static:
+      initial_throttle: 0.5
+      merge_throttle: 0.7
+      static_brake: 0.8
+      cut_out_delay: 0.8
+      trigger_distance: 14
+
+    # BicycleCrossScene (scenario 3c/5a/5b)
+    bicycle:
+      speed: 5.0            # Was default, higher = more dangerous
+      trigger_distance: 12
+
+    # StaticCarCrossScene (scenario 2g)
+    static_car_cross:
+      throttle: 0.8
+      trigger_distance: 12
+
+    # StaticObstacleScene (scenario 2f)
+    static_obstacle:
+      obstacle_distance: 8  # Closer obstacle = harder to avoid
+      trigger_distance: 12
+
+    # EgoRouteFollowScene (scenario 2b/6a/6b/6c)
+    ego_route_follow:
+      throttle: 0.8
+      trigger_distance: 14
+
+# ============================================================
+# Genetic Algorithm optimization bounds
+# These define the search space for optimizing dangerous NPC states.
+# The GA tries to find the most collision-prone configuration.
+# ============================================================
+ga_bounds:
+  # OtherLeadingVehicle / CarCross scenarios
+  car_cross:
+    # [actor_speed, scenario_trigger_distance, deceleration_trigger_distance,
+    #  x_offset, y_offset, yaw_offset]
+    bounds:
+      actor_speed:          [6.0, 14.0]     # NPC speed (m/s) - higher = more dangerous
+      scenario_trigger:     [20.0, 50.0]    # When to start NPC movement
+      deceleration_trigger: [5.0, 10.0]     # When to brake (SHORTER = more dangerous!)
+      x_offset:             [-1.0, 1.0]     # Lateral offset (keep in lane)
+      y_offset:             [-10.0, 10.0]   # Longitudinal offset
+      yaw_offset:           [-15.0, 15.0]   # Angle offset
+
+  # Cut-out scenarios
+  car_cut_out:
+    bounds:
+      actor_speed:          [5.0, 12.0]
+      scenario_trigger:     [15.0, 40.0]
+      deceleration_trigger: [5.0, 10.0]
+      x_offset:             [-1.0, 1.0]
+      y_offset:             [-10.0, 10.0]
+      yaw_offset:           [-15.0, 15.0]
+
+  # Pedestrian scenarios
+  pedestrian:
+    bounds:
+      walker_speed:         [2.5, 5.0]      # Faster pedestrians
+      trigger_distance:     [8.0, 15.0]     # Trigger closer
+      x_offset:             [-2.0, 2.0]
+      y_offset:             [-5.0, 5.0]
+      yaw_offset:           [-30.0, 30.0]
+
+# ============================================================
+# Collision profile (inspired by tcp_collision_profile)
+# These parameters control when and how aggressively NPCs act.
+# ============================================================
+collision_profile:
+  # Trigger distance scale: multiply the default trigger distance by this factor
+  # < 1.0 = shorter trigger = more dangerous
+  trigger_distance_scale: 0.7
+
+  # Deceleration trigger distance scale
+  # How early NPCs start braking (< 1.0 = brake later = more dangerous)
+  deceleration_scale: 0.6
+
+  # Minimum trigger distance (meters)
+  min_trigger_distance: 8.0
+
+  # Minimum deceleration trigger distance
+  min_deceleration_distance: 5.0
+
+  # NPC speed boost factor
+  speed_boost: 1.3
+
+  # Timeout extension (more time = more chance for collision)
+  timeout_scale: 1.2
+
+# ============================================================
+# Scenario-specific overrides
+# Use these to fine-tune individual scenario types.
+# ============================================================
+scenario_overrides:
+  # Override for scenario_id 3 (OtherLeadingVehicle / CarCross)
+  3:
+    trigger_distance_scale: 0.60
+    deceleration_scale: 0.58
+    min_deceleration_distance: 5.0
+    max_deceleration_distance: 9.5
+    speed_boost: 1.3
+
+  # Override for scenario_id 5 (OppositeVehicleRunningRedLight)
+  5:
+    target_ttc: 2.6
+    trigger_distance_scale: 0.58
+    min_trigger_distance: 13.0
+    max_trigger_distance: 29.0
+    speed_boost: 1.2
+
+  # Override for scenario_id 8 (NoSignal Junction Crossing)
+  8:
+    min_trigger_speed: 2.6
+    target_ttc: 3.0
+    trigger_distance_scale: 0.55
+    min_trigger_distance: 12.0
+    max_trigger_distance: 26.0
+    ego_max_driven_distance_scale: 1.55
+    min_ego_max_driven_distance: 110.0
+    speed_boost: 1.2
