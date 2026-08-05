@@ -6,6 +6,7 @@ import os
 import imageio
 import numpy as np
 import pickle
+import random
 import pandas as pd
 from scene import PedestrianCrossScene, BicycleCrossScene,StaticPedestrianCrossScene, CarCrossScene, StaticCarCrossScene, StaticObstacleScene, OccludedPedestrianScene, CarCutOutScene, CarCutInScene, CarOncomingPassScene, CarStopandGoScene, CarCutOutandStaticScene, CarGoandStopScene, EgoRouteFollowScene
 from render import Visualizer
@@ -66,6 +67,144 @@ def load_weather_from_json(world, json_path, town_name, route_id="route_01"):
     except Exception as e:
         print(f"❌ Weather load failed: {e}")
 
+def spawn_traffic_npcs(world, client, total_npcs=20, car_ratio=0.5, cyclist_ratio=0.3):
+    """
+    在场景周围随机生成NPC（车辆、自行车、行人）并让它们自动驾驶
+    使用CARLA自带的Traffic Manager实现车辆自动驾驶，Walker AI控制行人
+    """
+    if total_npcs <= 0:
+        return []
+
+    bp_lib = world.get_blueprint_library()
+    spawned_actors = []
+
+    # 计算各类NPC数量
+    n_cars = int(total_npcs * car_ratio)
+    n_cyclists = int(total_npcs * cyclist_ratio)
+    n_pedestrians = total_npcs - n_cars - n_cyclists
+    print(f"\n🏙️  Spawning {total_npcs} NPCs: {n_cars} cars, {n_cyclists} cyclists, {n_pedestrians} pedestrians")
+
+    # ========== 生成车辆 ==========
+    spawn_points = world.get_map().get_spawn_points()
+    random.shuffle(spawn_points)
+    if not spawn_points:
+        print("⚠️ No spawn points available!")
+        return []
+
+    # 普通车辆蓝图（排除自行车/摩托车/特殊车辆）
+    car_bps = [bp for bp in bp_lib.filter('vehicle.*')
+               if 'bicycle' not in bp.id and 'motorcycle' not in bp.id
+               and 'ambulance' not in bp.id and 'firetruck' not in bp.id]
+
+    # 自行车/摩托车蓝图
+    cyclist_bps = [bp for bp in bp_lib.filter('vehicle.*')
+                   if 'bicycle' in bp.id or 'motorcycle' in bp.id]
+
+    # 批量生成车辆
+    vehicle_actors = []
+    if n_cars > 0 and car_bps:
+        batch = []
+        for i in range(min(n_cars, len(spawn_points))):
+            bp = random.choice(car_bps)
+            if bp.has_attribute('color'):
+                color = random.choice(bp.get_attribute('color').recommended_values)
+                bp.set_attribute('color', color)
+            batch.append(carla.command.SpawnActor(bp, spawn_points[i]))
+        results = client.apply_batch_sync(batch, False)
+        for result in results:
+            if not result.error:
+                actor = world.get_actor(result.actor_id)
+                if actor:
+                    vehicle_actors.append(actor)
+        print(f"  ✅ Spawned {len(vehicle_actors)} cars")
+
+    # 批量生成自行车
+    offset = min(n_cars, len(spawn_points))
+    avail_pts = spawn_points[offset:]
+    if n_cyclists > 0 and cyclist_bps and avail_pts:
+        batch = []
+        for i in range(min(n_cyclists, len(avail_pts))):
+            bp = random.choice(cyclist_bps)
+            batch.append(carla.command.SpawnActor(bp, avail_pts[i]))
+        results = client.apply_batch_sync(batch, False)
+        for result in results:
+            if not result.error:
+                actor = world.get_actor(result.actor_id)
+                if actor:
+                    vehicle_actors.append(actor)
+        print(f"  ✅ Spawned {n_cyclists} cyclists")
+
+    # 设置Traffic Manager（自动驾驶）
+    if vehicle_actors:
+        tm = client.get_trafficmanager()
+        tm.set_synchronous_mode(True)
+        tm.set_global_distance_to_leading_vehicle(2.0)
+        for v in vehicle_actors:
+            v.set_autopilot(True, tm.get_port())
+            # 随机设置速度偏移，让行驶更自然
+            tm.vehicle_percentage_speed_difference(v, random.uniform(-20, 20))
+        spawned_actors.extend(vehicle_actors)
+
+    # ========== 生成行人 ==========
+    if n_pedestrians > 0:
+        ped_bps = list(bp_lib.filter('walker.pedestrian.*'))
+        if ped_bps:
+            # 获取行人可用的导航点
+            ped_spawn_points = []
+            for _ in range(n_pedestrians * 3):
+                loc = world.get_random_location_from_navigation()
+                if loc is not None:
+                    ped_spawn_points.append(carla.Transform(loc))
+            ped_spawn_points = ped_spawn_points[:n_pedestrians]
+
+            # 批量生成行人
+            batch = []
+            chosen_bps = [random.choice(ped_bps) for _ in range(len(ped_spawn_points))]
+            for i, sp in enumerate(ped_spawn_points):
+                batch.append(carla.command.SpawnActor(chosen_bps[i], sp))
+            results = client.apply_batch_sync(batch, False)
+            walker_ids = []
+            for result in results:
+                if not result.error and result.actor_id > 0:
+                    walker_ids.append(result.actor_id)
+
+            # 生成行人控制器
+            if walker_ids:
+                ai_bp = bp_lib.find('controller.ai.walker')
+                batch = []
+                for wid in walker_ids:
+                    batch.append(carla.command.SpawnActor(ai_bp, carla.Transform(), wid))
+                results = client.apply_batch_sync(batch, True)
+                controller_ids = []
+                for result in results:
+                    if not result.error:
+                        controller_ids.append(result.actor_id)
+
+                # 启动行人AI
+                world.tick()
+                for cid in controller_ids:
+                    controller = world.get_actor(cid)
+                    if controller:
+                        controller.start()
+                        dest = world.get_random_location_from_navigation()
+                        if dest:
+                            controller.go_to_location(dest)
+                        controller.set_max_speed(1.4 + random.random() * 0.6)
+
+                # 记录actors以便清理
+                for wid in walker_ids:
+                    actor = world.get_actor(wid)
+                    if actor:
+                        spawned_actors.append(actor)
+                for cid in controller_ids:
+                    actor = world.get_actor(cid)
+                    if actor:
+                        spawned_actors.append(actor)
+                print(f"  ✅ Spawned {len(walker_ids)} pedestrians")
+
+    print(f"🎯 Total NPCs spawned: {len(spawned_actors)}\n")
+    return spawned_actors
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--town', type=str, required=True)
@@ -77,6 +216,12 @@ def main():
     parser.add_argument('--model_path', type=str, default='./tcp/best_model.ckpt')
     parser.add_argument('--collision_config', type=str, default=None,
                         help='Path to collision enhancement config YAML (default: collision_config.yaml in tools dir)')
+    parser.add_argument('--npc_total', type=int, default=0,
+                        help='Total number of NPCs to spawn (cars + cyclists + pedestrians)')
+    parser.add_argument('--npc_car_ratio', type=float, default=0.50,
+                        help='Ratio of cars among NPCs (default: 0.50)')
+    parser.add_argument('--npc_cyclist_ratio', type=float, default=0.30,
+                        help='Ratio of cyclists among NPCs (default: 0.30, remaining = pedestrians)')
 
     args = parser.parse_args()
 
@@ -172,6 +317,16 @@ def main():
             continue
 
         # ======================
+        # 生成环境NPC（自动驾驶流量）
+        # ======================
+        npc_actors = spawn_traffic_npcs(
+            world, client,
+            total_npcs=args.npc_total,
+            car_ratio=args.npc_car_ratio,
+            cyclist_ratio=args.npc_cyclist_ratio
+        )
+
+        # ======================
         # 碰撞传感器
         # ======================
         collision_occurred = False
@@ -260,6 +415,13 @@ def main():
 
         collision_sensor.stop()
         collision_sensor.destroy()
+
+        # 清理环境NPC
+        for actor in npc_actors:
+            if actor.is_alive:
+                actor.destroy()
+        print(f"  🧹 Cleaned up {len(npc_actors)} NPCs")
+
         writer.close()
         viz.destroy()
         scene.destroy()
@@ -280,5 +442,8 @@ if __name__ == '__main__':
 
     # python tools/run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a
     # input_dir 读取json文件，town和scenario决定使用哪个场景类，video_dir决定视频输出目录
-    # python tools/run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a --model tcp 
+    # python tools/run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a --model tcp
     # python tools/run.py --input_dir ./save_scenarios/ --town roadside_1 --scenario 3a --model behavior
+    #
+    # 生成环境NPC示例（20个NPC：50%汽车 + 30%自行车 + 20%行人）：
+    # python tools/run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 2b --npc_total 20 --npc_car_ratio 0.50 --npc_cyclist_ratio 0.30

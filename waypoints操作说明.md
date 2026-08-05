@@ -145,6 +145,37 @@ python run.py --input_dir ./save_scenarios/ --town Town10HD_Opt --scenario 3a --
 | `--video_dir` | 视频输出目录 | videos |
 | `--route_id` | 路线ID | route_01 |
 | `--collision_config` | 碰撞增强YAML配置路径 | collision_config.yaml |
+| `--npc_total` | 环境NPC总数（汽车+自行车+行人） | 0（不生成） |
+| `--npc_car_ratio` | NPC中汽车比例 | 0.50 |
+| `--npc_cyclist_ratio` | NPC中自行车/摩托车比例 | 0.30（剩余为行人） |
+
+### 环境NPC生成说明
+
+使用 **Traffic Manager** 和 **Walker AI** 在场景周围随机生成自动驾驶的交通流量：
+
+- **车辆（`--npc_car_ratio`）**：从地图出生点随机生成，使用Traffic Manager自动驾驶，随机颜色和速度偏移
+- **自行车/摩托车（`--npc_cyclist_ratio`）**：从地图剩余出生点生成，同样使用Traffic Manager控制
+- **行人（剩余比例）**：从导航点随机生成，使用Walker AI控制器自动漫游
+
+示例 — 生成20个NPC，包含汽车、自行车和行人：
+
+```bash
+python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 2b --npc_total 20 --npc_car_ratio 0.50 --npc_cyclist_ratio 0.30
+```
+
+示例 — 只生成行人（适合行人场景测试）：
+
+```bash
+python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a --npc_total 10 --npc_car_ratio 0.0 --npc_cyclist_ratio 0.0
+```
+
+示例 — 生成大量车辆交通流：
+
+```bash
+python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 4a --npc_total 30 --npc_car_ratio 0.90 --npc_cyclist_ratio 0.0
+```
+
+> **注意**：`npc_total=0`（默认）时不生成任何环境NPC，仅在场景本身定义的agent参与测试。
 
 ### 碰撞增强机制
 
