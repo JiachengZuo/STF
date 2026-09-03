@@ -271,28 +271,50 @@ class CarCutOutandStaticScene(BaseScene):
             if self.ego.get_location().distance(trig_loc) < adj_trigger:
                 self.triggered = True
                 self.trigger_time = time.time()
+                # ==========新增：触发瞬间关闭NPC autopilot，准备手动控制==========
+                for car in self.cars:
+                    if car.is_alive:
+                        car.set_autopilot(False)
+
                 for i, car in enumerate(self.cars):
                     self.directions[i] = self._get_safe_lane_direction(car)
 
         if self.triggered:
             for i, car in enumerate(self.cars):
-                if not car.is_alive: continue
+                if not car.is_alive:
+                    continue
+                # =========关键：如果已经完成cut_out，交还自动驾驶，不再手动发control=========
+                if self.cut_out_finish[i]:
+                    continue
+
                 control = carla.VehicleControl()
                 dir = self.directions[i]
                 elapsed = time.time() - self.trigger_time
                 control.throttle = min(1.0, adj_throttle * boost)
                 control.brake = 0.0
-                if elapsed < 0.5:
-                    control.steer = 0.9 * dir
-                elif elapsed < 1.0:
+
+                # 只在机动窗口内执行变道打方向
+                if elapsed < 0.8:
+                    control.steer = 2 * dir
+                    print(dir)
+                elif elapsed < 1:
                     control.steer = -0.25 * dir
+                    print("迴轉")
                 else:
+                    # >1s：认为变道机动完成，标记完成，开启autopilot交还道路跟随
+                    print("自動")
                     control.steer = 0.0
                     self.cut_out_finish[i] = True
+                    car.set_autopilot(True)   # <<<<<<核心修复：还给CARLA自动驾驶
                 car.apply_control(control)
 
-        if self.triggered and time.time() - self.trigger_time > timeout:
-            return False
+            # 超时兜底：全部NPC恢复autopilot，退出场景
+            if self.triggered and time.time() - self.trigger_time > timeout:
+                for car in self.cars:
+                    if car.is_alive:
+                        car.set_autopilot(True)
+                return False
+
         return True
 
     def _get_safe_lane_direction(self, vehicle):
@@ -577,12 +599,19 @@ class CarCutOutScene(BaseScene):
     def _get_safe_lane_direction(self, vehicle):
         loc = vehicle.get_location()
         wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not wp: return 0
+        if not wp:
+            return 0
+
         left_wp = wp.get_left_lane()
         right_wp = wp.get_right_lane()
-        if left_wp and left_wp.lane_type == carla.LaneType.Driving: return 1
-        if right_wp and right_wp.lane_type == carla.LaneType.Driving: return -1
+
+        # 必须：相邻车道存在 + 是行驶车道 + 和当前车道方向相同
+        if left_wp and left_wp.lane_type == carla.LaneType.Driving and left_wp.lane_id * wp.lane_id > 0:
+            return 1
+        if right_wp and right_wp.lane_type == carla.LaneType.Driving and right_wp.lane_id * wp.lane_id > 0:
+            return -1
         return 0
+
 
 # ============================
 # 车辆切入（标准化 + TCP兼容）
