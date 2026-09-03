@@ -210,7 +210,7 @@ class CarCutOutandStaticScene(BaseScene):
             if cfg['type'] == 'obstacle':
                 x = float(cfg['transform']['x'])
                 y = float(cfg['transform']['y'])
-                z = 0.3
+                z = float(cfg['transform']['z'])
                 yaw = float(cfg['transform']['yaw'])
                 static_bp = bp_lib.find('vehicle.tesla.model3')
                 static_tf = carla.Transform(carla.Location(x, y, z), carla.Rotation(yaw=yaw))
@@ -283,7 +283,7 @@ class CarCutOutandStaticScene(BaseScene):
                 control.throttle = min(1.0, adj_throttle * boost)
                 control.brake = 0.0
                 if elapsed < 0.5:
-                    control.steer = 0.25 * dir
+                    control.steer = 0.9 * dir
                 elif elapsed < 1.0:
                     control.steer = -0.25 * dir
                 else:

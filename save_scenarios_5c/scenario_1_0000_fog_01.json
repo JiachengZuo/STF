@@ -1,0 +1,72 @@
+{
+  "5c_4": {
+    "route_01": [
+      {
+        "name": "scenario_1_0000",
+        "ego_start": {
+          "x": "292.14",
+          "y": "-31.47",
+          "z": "5.30",
+          "yaw": "-197.22"
+        },
+        "ego_route": [],
+        "weather": {
+          "cloudiness": 100,
+          "dust_storm": 0.0,
+          "fog_density": 30,
+          "fog_distance": 70,
+          "fog_falloff": 0.8,
+          "mie_scattering_scale": 0.03,
+          "precipitation": 0.0,
+          "precipitation_deposits": 0.0,
+          "rayleigh_scattering_scale": 0.0331,
+          "scattering_intensity": 0.5,
+          "sun_altitude_angle": 35.0,
+          "sun_azimuth_angle": 120.0,
+          "wetness": 0.0,
+          "wind_intensity": 5.0
+        },
+        "trigger_position": {
+          "pitch": "0.0",
+          "x": "278.21",
+          "y": "-23.73",
+          "yaw": "141.50",
+          "z": "5.00"
+        },
+        "trigger_radius": 2.0,
+        "other_actors": {
+          "center": [
+            {
+              "type": "car",
+              "model": "vehicle.tesla.model3",
+              "transform": {
+                "pitch": "0.00",
+                "x": "264.67",
+                "y": "-12.77",
+                "yaw": "142.66",
+                "z": "5.30"
+              },
+              "rolename": "car",
+              "autopilot": true
+            },
+            {
+              "type": "obstacle",
+              "model": "static.prop.container",
+              "transform": {
+                "pitch": "0.00",
+                "x": "249.98",
+                "y": "0.48",
+                "yaw": "130.74",
+                "z": "5.30"
+              },
+              "rolename": "obstacle",
+              "autopilot": true
+            }
+          ]
+        },
+        "timeout": 60.0,
+        "active": true
+      }
+    ]
+  }
+}

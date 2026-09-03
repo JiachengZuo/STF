@@ -74,7 +74,8 @@ SCENE_CLASSES = {
 
 def get_sorted_scenario_files(input_dir, scenario_code=None):
     files = []
-    prefix = "scenario_{}_".format(scenario_code) if scenario_code else "scenario_"
+    prefix = "scenario_"
+    print(prefix)
     for f in os.listdir(input_dir):
         if f.startswith(prefix) and f.endswith('.json'):
             files.append(f)
