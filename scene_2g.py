@@ -530,7 +530,6 @@ class CarOncomingPassScene(BaseScene):
         self.cars = []
         self.state = []
         self.cut_direction = []
-        self.original_lane_ids = []
         self.triggered = False
         self.trigger_time = 0
         self.ego = self.spawn_ego()
@@ -548,43 +547,6 @@ class CarOncomingPassScene(BaseScene):
             available_waypoints = get_available_waypoints(self.world, self.ego.get_location(), num_waypoints=1, step_distance=18.0)
             self.planner.set_route(available_waypoints)
 
-    def _get_lane_follow_steer(self, vehicle):
-        """沿当前车道waypoints计算转向角"""
-        loc = vehicle.get_location()
-        wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not wp:
-            return 0.0
-
-        next_wps = wp.next(6.0)
-        if not next_wps:
-            return 0.0
-
-        target_loc = next_wps[0].transform.location
-
-        dx = target_loc.x - loc.x
-        dy = target_loc.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-
-        trans = vehicle.get_transform()
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-
-        steer = max(min(1.5 * yaw_err, 0.3), -0.3)
-        return steer
-
-    def _steer_to_target(self, vehicle, target_location, max_steer=0.45):
-        """计算朝指定location的转向值"""
-        loc = vehicle.get_location()
-        dx = target_location.x - loc.x
-        dy = target_location.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-        trans = vehicle.get_transform()
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-        return max(min(2.0 * yaw_err, max_steer), -max_steer)
-
     def spawn(self):
         if not self.ego: raise RuntimeError("自车生成失败！")
         time.sleep(0.2)
@@ -592,6 +554,9 @@ class CarOncomingPassScene(BaseScene):
         if self.tcp_flag:
             print("[TCP] 模型已加载，启用TCP控制")
             self.spawn_camera()
+            self.world.tick()
+        else:
+            self.ego.set_autopilot(True)
             self.world.tick()
 
         bp_lib = self.world.get_blueprint_library()
@@ -608,7 +573,6 @@ class CarOncomingPassScene(BaseScene):
                 self.actors.append(car)
                 self.state.append(0)
                 self.cut_direction.append(0)
-                self.original_lane_ids.append(0)
 
     def spawn_camera(self):
         bp_lib = self.world.get_blueprint_library()
@@ -634,14 +598,6 @@ class CarOncomingPassScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
-        else:
-            # 非TCP模式（behavior）：沿车道waypoints直行
-            ego_steer = self._get_lane_follow_steer(self.ego)
-            ego_ctrl = carla.VehicleControl()
-            ego_ctrl.throttle = 0.45
-            ego_ctrl.steer = ego_steer
-            ego_ctrl.brake = 0.0
-            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -659,108 +615,35 @@ class CarOncomingPassScene(BaseScene):
             if self.ego.get_location().distance(trig_loc) < adj_trigger:
                 self.triggered = True
                 self.trigger_time = time.time()
-                # 固定每辆NPC的借道方向和初始车道lane_id（从NPC自身waypoint视角）
-                for idx, car in enumerate(self.cars):
-                    if not car.is_alive:
-                        continue
-                    car_wp = self.map.get_waypoint(car.get_location(), project_to_road=True)
-                    if car_wp:
-                        self.original_lane_ids[idx] = car_wp.lane_id
-                        # 从NPC视角找借道车道：相邻的任意Driving车道
-                        right = car_wp.get_right_lane()
-                        left = car_wp.get_left_lane()
-                        if right and right.lane_type == carla.LaneType.Driving:
-                            self.cut_direction[idx] = 1
-                        elif left and left.lane_type == carla.LaneType.Driving:
-                            self.cut_direction[idx] = -1
-                        else:
-                            self.cut_direction[idx] = 0
-                    else:
-                        self.cut_direction[idx] = 0
-                    self.state[idx] = 1
 
         if self.triggered:
             for idx, car in enumerate(self.cars):
-                if not car.is_alive:
-                    continue
+                if not car.is_alive: continue
                 control = carla.VehicleControl()
                 control.throttle = min(1.0, adj_throttle * boost)
                 control.brake = 0.0
-                car_wp = self.map.get_waypoint(car.get_location(), project_to_road=True)
-
-                if self.state[idx] == 1:
-                    # Phase 1: 朝ego前方的waypoints借道
-                    ego_wp = self.map.get_waypoint(self.ego.get_location(), project_to_road=True)
-                    if ego_wp:
-                        # 取ego前方车道相邻侧的车道（借道方向），获取其前方waypoints
-                        if self.cut_direction[idx] == 1:
-                            side_wp = ego_wp.get_right_lane()
-                        else:
-                            side_wp = ego_wp.get_left_lane()
-                        if side_wp and side_wp.lane_type == carla.LaneType.Driving:
-                            ahead = side_wp.next(10.0)
-                            if not ahead:
-                                ahead = side_wp.next(5.0)
-                        else:
-                            # fallback: ego当前车道前方的waypoints
-                            ahead = ego_wp.next(10.0)
-                            if not ahead:
-                                ahead = ego_wp.next(5.0)
-                        if ahead:
-                            control.steer = self._steer_to_target(car, ahead[0].transform.location)
-                        else:
-                            control.steer = 0.15 * self.cut_direction[idx]
-                    else:
-                        control.steer = 0.15 * self.cut_direction[idx]
-
-                    # lane_id变化 = 已进入借道车道
-                    if car_wp and self.original_lane_ids[idx] != 0 and car_wp.lane_id != self.original_lane_ids[idx]:
+                if self.state[idx] == 0:
+                    trans = car.get_transform()
+                    dx = self.ego.get_location().x - car.get_location().x
+                    dy = self.ego.get_location().y - car.get_location().y
+                    yaw_car = math.radians(trans.rotation.yaw)
+                    cross = dx * math.sin(yaw_car) - dy * math.cos(yaw_car)
+                    self.cut_direction[idx] = -1 if cross > 0 else 1
+                    self.state[idx] = 1
+                elif self.state[idx] == 1:
+                    control.steer = 0.10 * self.cut_direction[idx]
+                    if time.time() - self.trigger_time > 1.2:
                         self.state[idx] = 2
-
                 elif self.state[idx] == 2:
-                    # Phase 2: 在借道车道直行（steer=0，因为借道车道方向和NPC行驶方向相反，不能用lane follow）
                     control.steer = 0.0
-                    if time.time() - self.trigger_time > 1:
+                    if time.time() - self.trigger_time > 2:
                         self.state[idx] = 3
-
                 elif self.state[idx] == 3:
-                    # Phase 3: 快速返回原始车道
-                    if car_wp and self.original_lane_ids[idx] != 0:
-                        if car_wp.lane_id == self.original_lane_ids[idx]:
-                            self.state[idx] = 4
-                        else:
-                            # 从NPC当前位置的相邻车道中找lane_id匹配的原车道
-                            return_wp = None
-                            right = car_wp.get_right_lane()
-                            left = car_wp.get_left_lane()
-                            if right and right.lane_id == self.original_lane_ids[idx]:
-                                return_wp = right
-                            elif left and left.lane_id == self.original_lane_ids[idx]:
-                                return_wp = left
-
-                            if return_wp:
-                                ahead = return_wp.next(8.0)
-                                if not ahead:
-                                    ahead = return_wp.next(4.0)
-                                if ahead:
-                                    control.steer = self._steer_to_target(car, ahead[0].transform.location, 0.5)
-                                else:
-                                    control.steer = -0.18 * self.cut_direction[idx]
-                            else:
-                                control.steer = -0.18 * self.cut_direction[idx]
-                    else:
-                        control.steer = -0.18 * self.cut_direction[idx]
-
-                    if time.time() - self.trigger_time > 3.5:
+                    control.steer = -0.10 * self.cut_direction[idx]
+                    if time.time() - self.trigger_time > 2.8:
                         self.state[idx] = 4
-
                 elif self.state[idx] == 4:
-                    # Phase 4: 回到原车道后沿waypoints行驶
-                    if car_wp and car_wp.lane_id == self.original_lane_ids[idx]:
-                        control.steer = self._get_lane_follow_steer(car)
-                    else:
-                        control.steer = 0.0
-
+                    control.steer = 0.0
                 car.apply_control(control)
 
         if self.triggered and time.time() - self.trigger_time > timeout:
@@ -778,7 +661,6 @@ class CarCutOutScene(BaseScene):
         self.cars = []
         self.directions = []
         self.cut_out_finish = []
-        self.target_lane_ids = []
         self.triggered = False
         self.trigger_time = 0
         self.ego = self.spawn_ego()
@@ -796,154 +678,6 @@ class CarCutOutScene(BaseScene):
             available_waypoints = get_available_waypoints(self.world, self.ego.get_location(), num_waypoints=1, step_distance=18.0)
             self.planner.set_route(available_waypoints)
 
-    def _get_lane_follow_steer(self, vehicle):
-        """沿当前车道waypoints计算转向角"""
-        loc = vehicle.get_location()
-        wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not wp:
-            return 0.0
-
-        next_wps = wp.next(6.0)
-        if not next_wps:
-            return 0.0
-
-        target_loc = next_wps[0].transform.location
-
-        dx = target_loc.x - loc.x
-        dy = target_loc.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-
-        trans = vehicle.get_transform()
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-
-        steer = max(min(1.5 * yaw_err, 0.3), -0.3)
-        return steer
-
-    def _get_safe_lane_direction(self, vehicle):
-        """获取安全切出方向，返回 (direction, target_lane_id)
-        direction: 1=right, -1=left, 0=none"""
-        loc = vehicle.get_location()
-        wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not wp:
-            return 0, 0
-        right_wp = wp.get_right_lane()
-        left_wp = wp.get_left_lane()
-        # 优先右侧车道
-        if right_wp and right_wp.lane_type == carla.LaneType.Driving:
-            return 1, right_wp.lane_id
-        if left_wp and left_wp.lane_type == carla.LaneType.Driving:
-            return -1, left_wp.lane_id
-        return 0, 0
-
-    def _lane_change_control(self, vehicle, direction, throttle, boost, target_lane_id):
-        """基于目标车道waypoint的两阶段变道控制，返回 (control, done)
-        Phase 1 — 横向移动：引导车头指向目标车道前方waypoint
-        Phase 2 — 车头摆正并沿目标车道行驶
-        """
-        loc = vehicle.get_location()
-        trans = vehicle.get_transform()
-        current_wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not current_wp:
-            return None, True
-
-        on_target = (target_lane_id != 0 and current_wp.lane_id == target_lane_id)
-
-        if on_target:
-            # Phase 2: Follow target lane waypoints to align heading
-            target_next = current_wp.next(6.0)
-            if not target_next:
-                target_next = current_wp.next(3.0)
-            lane_forward = current_wp.transform.get_forward_vector()
-            vehicle_forward = trans.get_forward_vector()
-            heading_dot = (vehicle_forward.x * lane_forward.x +
-                           vehicle_forward.y * lane_forward.y)
-            if heading_dot > 0.97 and target_next:
-                control = carla.VehicleControl()
-                control.steer = 0.0
-                control.throttle = min(1.0, throttle * boost)
-                control.brake = 0.0
-                return control, True
-            if target_next:
-                target_loc = target_next[0].transform.location
-                dx = target_loc.x - loc.x
-                dy = target_loc.y - loc.y
-                desired_yaw = math.atan2(dy, dx)
-                current_yaw = math.radians(trans.rotation.yaw)
-                yaw_err = desired_yaw - current_yaw
-                yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-                steer = max(min(2.0 * yaw_err, 0.35), -0.35)
-            else:
-                lane_yaw = math.atan2(lane_forward.y, lane_forward.x)
-                current_yaw = math.radians(trans.rotation.yaw)
-                yaw_err = lane_yaw - current_yaw
-                yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-                steer = max(min(2.0 * yaw_err, 0.4), -0.4)
-                if abs(yaw_err) < 0.08:
-                    control = carla.VehicleControl()
-                    control.steer = 0.0
-                    control.throttle = min(1.0, throttle * boost)
-                    control.brake = 0.0
-                    return control, True
-            control = carla.VehicleControl()
-            control.steer = steer
-            control.throttle = min(1.0, throttle * boost)
-            control.brake = 0.0
-            return control, False
-
-        # Phase 1: Diagonal move toward target lane
-        if direction == 1:
-            target_wp = current_wp.get_right_lane()
-        else:
-            target_wp = current_wp.get_left_lane()
-        if not target_wp:
-            return None, True
-        target_next = target_wp.next(8.0)
-        if not target_next:
-            target_next = target_wp.next(4.0)
-        if not target_next:
-            return None, True
-        target_loc = target_next[0].transform.location
-        dx = target_loc.x - loc.x
-        dy = target_loc.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-        steer = max(min(2.0 * yaw_err, 0.45), -0.45)
-        control = carla.VehicleControl()
-        control.steer = steer
-        control.throttle = min(1.0, throttle * boost)
-        control.brake = 0.0
-        return control, False
-
-    def _lane_follow_control(self, vehicle, throttle, boost):
-        """沿当前车道waypoints持续行驶"""
-        loc = vehicle.get_location()
-        trans = vehicle.get_transform()
-        current_wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not current_wp:
-            return None
-        next_wps = current_wp.next(6.0)
-        if not next_wps:
-            next_wps = current_wp.next(3.0)
-        if not next_wps:
-            return None
-        target_loc = next_wps[0].transform.location
-        dx = target_loc.x - loc.x
-        dy = target_loc.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-        steer = max(min(1.5 * yaw_err, 0.3), -0.3)
-        control = carla.VehicleControl()
-        control.steer = steer
-        control.throttle = min(1.0, throttle * boost)
-        control.brake = 0.0
-        return control
-
     def spawn(self):
         if not self.ego: raise RuntimeError("自车生成失败！")
         time.sleep(0.2)
@@ -951,6 +685,9 @@ class CarCutOutScene(BaseScene):
         if self.tcp_flag:
             print("[TCP] 模型已加载，启用TCP控制")
             self.spawn_camera()
+            self.world.tick()
+        else:
+            self.ego.set_autopilot(True)
             self.world.tick()
 
         bp_lib = self.world.get_blueprint_library()
@@ -967,7 +704,6 @@ class CarCutOutScene(BaseScene):
                 self.actors.append(car)
                 self.directions.append(0)
                 self.cut_out_finish.append(False)
-                self.target_lane_ids.append(0)
 
     def spawn_camera(self):
         bp_lib = self.world.get_blueprint_library()
@@ -993,23 +729,18 @@ class CarCutOutScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
-        else:
-            # 非TCP模式（behavior）：沿车道waypoints直行
-            ego_steer = self._get_lane_follow_steer(self.ego)
-            ego_ctrl = carla.VehicleControl()
-            ego_ctrl.throttle = 0.45
-            ego_ctrl.steer = ego_steer
-            ego_ctrl.brake = 0.0
-            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
         adj_trigger = get_adjusted_trigger_distance(12, 'car_cut_out', 4, config)
         boost = get_npc_speed_boost('car_cut_out', config)
+        cut_out_delay = 1.3
         merge_throttle = 0.5
         if config.get('global', {}).get('enabled', True):
             t_scale = config.get('collision_profile', {}).get('timeout_scale', 1.2)
             type_overrides = config.get('npc_speed', {}).get('overrides', {}).get('car_cut_out', {})
+            if 'cut_out_delay' in type_overrides:
+                cut_out_delay = type_overrides['cut_out_delay']
             if 'merge_throttle' in type_overrides:
                 merge_throttle = type_overrides['merge_throttle']
             timeout = 10.0 * t_scale
@@ -1023,47 +754,53 @@ class CarCutOutScene(BaseScene):
                 self.triggered = True
                 self.trigger_time = time.time()
                 for i, car in enumerate(self.cars):
-                    self.directions[i], self.target_lane_ids[i] = self._get_safe_lane_direction(car)
+                    self.directions[i] = self._get_safe_lane_direction(car)
 
         if self.triggered:
             for i, car in enumerate(self.cars):
-                if not car.is_alive:
-                    continue
-
-                # 没有可用切出车道 → 刹车停止
-                if self.directions[i] == 0:
-                    control = carla.VehicleControl()
+                if not car.is_alive: continue
+                control = carla.VehicleControl()
+                dir = self.directions[i]
+                if dir == 0:
                     control.throttle = 0.0
                     control.brake = 0.5
                     control.steer = 0.0
                     car.apply_control(control)
                     continue
-
-                # 切出完成 → 沿目标车道waypoints行驶
                 if self.cut_out_finish[i]:
-                    follow_control = self._lane_follow_control(car, merge_throttle, boost)
-                    if follow_control is not None:
-                        car.apply_control(follow_control)
-                    continue
-
-                # 执行变道
-                control, done = self._lane_change_control(
-                    car, self.directions[i], merge_throttle, boost, self.target_lane_ids[i])
-
-                if done:
-                    self.cut_out_finish[i] = True
-                elif control is not None:
+                    control.throttle = min(1.0, merge_throttle * boost)
+                    control.steer = 0.0
+                    control.brake = 0.0
                     car.apply_control(control)
+                    continue
+                control.throttle = min(1.0, 0.45 * boost)
+                if time.time() - self.trigger_time < cut_out_delay:
+                    control.steer = 0.20 * dir
                 else:
+                    control.steer = 0.0
                     self.cut_out_finish[i] = True
-
-                # 超时fallback
-                if not self.cut_out_finish[i] and time.time() - self.trigger_time > 5.0:
-                    self.cut_out_finish[i] = True
+                control.brake = 0.0
+                car.apply_control(control)
 
         if self.triggered and time.time() - self.trigger_time > timeout:
             return False
         return True
+
+    def _get_safe_lane_direction(self, vehicle):
+        loc = vehicle.get_location()
+        wp = self.map.get_waypoint(loc, project_to_road=True)
+        if not wp:
+            return 0
+
+        left_wp = wp.get_left_lane()
+        right_wp = wp.get_right_lane()
+
+        # 必须：相邻车道存在 + 是行驶车道 + 和当前车道方向相同
+        if left_wp and left_wp.lane_type == carla.LaneType.Driving and left_wp.lane_id * wp.lane_id > 0:
+            return 1
+        if right_wp and right_wp.lane_type == carla.LaneType.Driving and right_wp.lane_id * wp.lane_id > 0:
+            return -1
+        return 0
 
 
 # ============================
@@ -1075,9 +812,8 @@ class CarCutInScene(BaseScene):
         self.world = world
         self.map = self.world.get_map()
         self.cars = []
-        self.directions = []
         self.cut_in_finish = []
-        self.target_lane_ids = []
+        self.original_yaw = []
         self.triggered = False
         self.trigger_time = 0
         self.ego = self.spawn_ego()
@@ -1095,171 +831,6 @@ class CarCutInScene(BaseScene):
             available_waypoints = get_available_waypoints(self.world, self.ego.get_location(), num_waypoints=1, step_distance=18.0)
             self.planner.set_route(available_waypoints)
 
-    def _get_lane_follow_steer(self, vehicle):
-        """沿当前车道waypoints计算转向角"""
-        loc = vehicle.get_location()
-        wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not wp:
-            return 0.0
-
-        next_wps = wp.next(6.0)
-        if not next_wps:
-            return 0.0
-
-        target_loc = next_wps[0].transform.location
-
-        dx = target_loc.x - loc.x
-        dy = target_loc.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-
-        trans = vehicle.get_transform()
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-
-        steer = max(min(1.5 * yaw_err, 0.3), -0.3)
-        return steer
-
-    def _get_cut_in_direction(self, vehicle):
-        """获取切入方向：从ego当前车道切到相邻车道
-        优先右侧（同向），其次左侧"""
-        loc = vehicle.get_location()
-        wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not wp:
-            return 0, 0
-        right = wp.get_right_lane()
-        left = wp.get_left_lane()
-        if right and right.lane_type == carla.LaneType.Driving:
-            return 1, right.lane_id
-        if left and left.lane_type == carla.LaneType.Driving:
-            return -1, left.lane_id
-        return 0, 0
-
-    def _lane_change_control(self, vehicle, direction, throttle, boost, target_lane_id):
-        """基于目标车道waypoint的两阶段变道控制，返回 (control, done)
-        Phase 1 — 横向移动：引导车头指向目标车道前方waypoint
-        Phase 2 — 车头摆正并沿目标车道行驶
-        """
-        loc = vehicle.get_location()
-        trans = vehicle.get_transform()
-        current_wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not current_wp:
-            return None, True
-
-        on_target = (target_lane_id != 0 and current_wp.lane_id == target_lane_id)
-
-        if on_target:
-            # Phase 2: Follow target lane waypoints to align heading
-            target_next = current_wp.next(6.0)
-            if not target_next:
-                target_next = current_wp.next(3.0)
-            lane_forward = current_wp.transform.get_forward_vector()
-            vehicle_forward = trans.get_forward_vector()
-            heading_dot = (vehicle_forward.x * lane_forward.x +
-                           vehicle_forward.y * lane_forward.y)
-            if heading_dot > 0.97 and target_next:
-                control = carla.VehicleControl()
-                control.steer = 0.0
-                control.throttle = min(1.0, throttle * boost)
-                control.brake = 0.0
-                return control, True
-            if target_next:
-                target_loc = target_next[0].transform.location
-                dx = target_loc.x - loc.x
-                dy = target_loc.y - loc.y
-                desired_yaw = math.atan2(dy, dx)
-                current_yaw = math.radians(trans.rotation.yaw)
-                yaw_err = desired_yaw - current_yaw
-                yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-                steer = max(min(2.0 * yaw_err, 0.35), -0.35)
-            else:
-                lane_yaw = math.atan2(lane_forward.y, lane_forward.x)
-                current_yaw = math.radians(trans.rotation.yaw)
-                yaw_err = lane_yaw - current_yaw
-                yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-                steer = max(min(2.0 * yaw_err, 0.4), -0.4)
-                if abs(yaw_err) < 0.08:
-                    control = carla.VehicleControl()
-                    control.steer = 0.0
-                    control.throttle = min(1.0, throttle * boost)
-                    control.brake = 0.0
-                    return control, True
-            control = carla.VehicleControl()
-            control.steer = steer
-            control.throttle = min(1.0, throttle * boost)
-            control.brake = 0.0
-            return control, False
-
-        # Phase 1: Diagonal cut-in toward target lane waypoint ahead of ego
-        ego_wp = self.map.get_waypoint(self.ego.get_location(), project_to_road=True)
-        if ego_wp:
-            if direction == 1:
-                target_wp = ego_wp.get_right_lane()
-            else:
-                target_wp = ego_wp.get_left_lane()
-            if target_wp:
-                target_next = target_wp.next(10.0)
-                if not target_next:
-                    target_next = target_wp.next(5.0)
-                if target_next:
-                    target_loc = target_next[0].transform.location
-                    dx = target_loc.x - loc.x
-                    dy = target_loc.y - loc.y
-                    desired_yaw = math.atan2(dy, dx)
-                    current_yaw = math.radians(trans.rotation.yaw)
-                    yaw_err = desired_yaw - current_yaw
-                    yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-                    steer = max(min(2.0 * yaw_err, 0.45), -0.45)
-                    control = carla.VehicleControl()
-                    control.steer = steer
-                    control.throttle = min(1.0, throttle * boost)
-                    control.brake = 0.0
-                    return control, False
-
-        # Fallback: steer toward ego's forward position
-        ego_loc = self.ego.get_location()
-        fwd = self.ego.get_transform().get_forward_vector()
-        target_x = ego_loc.x + fwd.x * 8.0
-        target_y = ego_loc.y + fwd.y * 8.0
-        dx = target_x - loc.x
-        dy = target_y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-        steer = max(min(2.0 * yaw_err, 0.45), -0.45)
-        control = carla.VehicleControl()
-        control.steer = steer
-        control.throttle = min(1.0, throttle * boost)
-        control.brake = 0.0
-        return control, False
-
-    def _lane_follow_control(self, vehicle, throttle, boost):
-        """沿当前车道waypoints持续行驶（替代autopilot，避免切回原车道）"""
-        loc = vehicle.get_location()
-        trans = vehicle.get_transform()
-        current_wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not current_wp:
-            return None
-        next_wps = current_wp.next(6.0)
-        if not next_wps:
-            next_wps = current_wp.next(3.0)
-        if not next_wps:
-            return None
-        target_loc = next_wps[0].transform.location
-        dx = target_loc.x - loc.x
-        dy = target_loc.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-        steer = max(min(1.5 * yaw_err, 0.3), -0.3)
-        control = carla.VehicleControl()
-        control.steer = steer
-        control.throttle = min(1.0, throttle * boost)
-        control.brake = 0.0
-        return control
-
     def spawn(self):
         if not self.ego: raise RuntimeError("自车生成失败！")
         time.sleep(0.2)
@@ -1267,6 +838,9 @@ class CarCutInScene(BaseScene):
         if self.tcp_flag:
             print("[TCP] 模型已加载，启用TCP控制")
             self.spawn_camera()
+            self.world.tick()
+        else:
+            self.ego.set_autopilot(True)
             self.world.tick()
 
         bp_lib = self.world.get_blueprint_library()
@@ -1281,9 +855,8 @@ class CarCutInScene(BaseScene):
             if car:
                 self.cars.append(car)
                 self.actors.append(car)
-                self.directions.append(0)
                 self.cut_in_finish.append(False)
-                self.target_lane_ids.append(0)
+                self.original_yaw.append(yaw)
 
     def spawn_camera(self):
         bp_lib = self.world.get_blueprint_library()
@@ -1309,14 +882,6 @@ class CarCutInScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
-        else:
-            # 非TCP模式（behavior）：沿车道waypoints直行
-            ego_steer = self._get_lane_follow_steer(self.ego)
-            ego_ctrl = carla.VehicleControl()
-            ego_ctrl.throttle = 0.45
-            ego_ctrl.steer = ego_steer
-            ego_ctrl.brake = 0.0
-            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -1334,39 +899,39 @@ class CarCutInScene(BaseScene):
             if self.ego.get_location().distance(trig_loc) < adj_trigger:
                 self.triggered = True
                 self.trigger_time = time.time()
-                # Store cut-in directions and target_lane_ids at trigger time
-                for i, car in enumerate(self.cars):
-                    self.directions[i], self.target_lane_ids[i] = self._get_cut_in_direction(car)
 
         if self.triggered:
             for idx, car in enumerate(self.cars):
-                if not car.is_alive:
-                    continue
+                if not car.is_alive or self.cut_in_finish[idx]: continue
+                trans = car.get_transform()
+                car_loc = trans.location
+                ego_loc = self.ego.get_location()
+                fwd = self.ego.get_transform().get_forward_vector()
+                target_x = ego_loc.x + fwd.x * 6.0
+                target_y = ego_loc.y + fwd.y * 6.0
+                dx = target_x - car_loc.x
+                dy = target_y - car_loc.y
+                dist = math.hypot(dx, dy)
+                control = carla.VehicleControl()
+                control.throttle = min(1.0, adj_throttle * boost)
+                control.brake = 0.0
 
-                # Already finished cut-in → follow target lane
-                if self.cut_in_finish[idx]:
-                    follow_control = self._lane_follow_control(car, adj_throttle, boost)
-                    if follow_control is not None:
-                        car.apply_control(follow_control)
-                    continue
-
-                if self.directions[idx] == 0:
-                    self.cut_in_finish[idx] = True
-                    continue
-
-                control, done = self._lane_change_control(
-                    car, self.directions[idx], adj_throttle, boost, self.target_lane_ids[idx])
-
-                if done:
-                    self.cut_in_finish[idx] = True
-                elif control is not None:
-                    car.apply_control(control)
+                if dist < 1.8 or time.time() - self.trigger_time > 2.2:
+                    ego_yaw = math.radians(self.ego.get_transform().rotation.yaw)
+                    car_yaw = math.radians(trans.rotation.yaw)
+                    yaw_err = ego_yaw - car_yaw
+                    yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
+                    control.steer = max(min(1.8 * yaw_err, 0.15), -0.15)
+                    if abs(yaw_err) < 0.08:
+                        self.cut_in_finish[idx] = True
+                        control.steer = 0.0
                 else:
-                    self.cut_in_finish[idx] = True
-
-                # Timeout fallback
-                if not self.cut_in_finish[idx] and time.time() - self.trigger_time > 4.0:
-                    self.cut_in_finish[idx] = True
+                    desired_yaw = math.atan2(dy, dx)
+                    car_yaw = math.radians(trans.rotation.yaw)
+                    yaw_err = desired_yaw - car_yaw
+                    yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
+                    control.steer = max(min(1.6 * yaw_err, 0.22), -0.22)
+                car.apply_control(control)
 
         if self.triggered and time.time() - self.trigger_time > timeout:
             return False
@@ -2083,8 +1648,8 @@ class CarGoandStopScene(BaseScene):
     def __init__(self, client, world, config_path, town, route_id, model, model_path=None):
         super().__init__(client, world, config_path, town, route_id)
         self.world = world
-        self.map = self.world.get_map()
         self.cars = []
+        self.car_ctrls = []
         self.triggered = False
         self.trigger_time = 0
         self.ego = self.spawn_ego()
@@ -2102,31 +1667,6 @@ class CarGoandStopScene(BaseScene):
             available_waypoints = get_available_waypoints(self.world, self.ego.get_location(), num_waypoints=1, step_distance=18.0)
             self.planner.set_route(available_waypoints)
 
-    def _get_lane_follow_steer(self, vehicle):
-        """沿当前车道waypoints计算转向角"""
-        loc = vehicle.get_location()
-        wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not wp:
-            return 0.0
-
-        next_wps = wp.next(6.0)
-        if not next_wps:
-            return 0.0
-
-        target_loc = next_wps[0].transform.location
-
-        dx = target_loc.x - loc.x
-        dy = target_loc.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-
-        trans = vehicle.get_transform()
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-
-        steer = max(min(1.5 * yaw_err, 0.3), -0.3)
-        return steer
-
     def spawn(self):
         if not self.ego:
             raise RuntimeError("自车生成失败！")
@@ -2136,6 +1676,9 @@ class CarGoandStopScene(BaseScene):
         if self.tcp_flag:
             print("[TCP] 模型已加载，启用TCP控制")
             self.spawn_camera()
+            self.world.tick()
+        else:
+            self.ego.set_autopilot(True)
             self.world.tick()
 
         bp_lib = self.world.get_blueprint_library()
@@ -2150,6 +1693,8 @@ class CarGoandStopScene(BaseScene):
             if car:
                 self.cars.append(car)
                 self.actors.append(car)
+                angle = math.radians(yaw)
+                self.car_ctrls.append((math.cos(angle), math.sin(angle)))
 
     def spawn_camera(self):
         bp_lib = self.world.get_blueprint_library()
@@ -2177,14 +1722,6 @@ class CarGoandStopScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
-        else:
-            # 非TCP模式（behavior）：沿车道waypoints直行
-            ego_steer = self._get_lane_follow_steer(self.ego)
-            ego_ctrl = carla.VehicleControl()
-            ego_ctrl.throttle = 0.45
-            ego_ctrl.steer = ego_steer
-            ego_ctrl.brake = 0.0
-            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -2202,26 +1739,14 @@ class CarGoandStopScene(BaseScene):
             if self.ego.get_location().distance(trig_loc) < adj_trigger:
                 self.triggered = True
                 self.trigger_time = time.time()
-            else:
-                # 触发前：NPC沿waypoints正常行驶
-                for car in self.cars:
-                    if not car.is_alive:
-                        continue
-                    ctrl = carla.VehicleControl()
-                    ctrl.throttle = min(1.0, adj_throttle * boost)
-                    ctrl.steer = self._get_lane_follow_steer(car)
-                    ctrl.brake = 0.0
-                    car.apply_control(ctrl)
 
         if self.triggered:
             elapsed = time.time() - self.trigger_time
             for car in self.cars:
-                if not car.is_alive:
-                    continue
                 control = carla.VehicleControl()
-                if elapsed < 0.5:
+                if elapsed < 2.0:
                     control.throttle = min(1.0, adj_throttle * boost)
-                    control.steer = self._get_lane_follow_steer(car)
+                    control.steer = 0.0
                     control.brake = 0.0
                 else:
                     control.throttle = 0.0
@@ -4963,8 +4488,8 @@ class StaticCarCrossScene(BaseScene):
     def __init__(self, client, world, config_path, town, route_id, model, model_path=None):
         super().__init__(client, world, config_path, town, route_id)
         self.world = world
-        self.map = self.world.get_map()
         self.cars = []
+        self.car_ctrls = []
         self.triggered = False
         self.trigger_time = 0
         self.ego = self.spawn_ego()
@@ -4982,31 +4507,6 @@ class StaticCarCrossScene(BaseScene):
             self.tcp = TCPAgent(self.model_path, self.planner)
             available_waypoints = get_available_waypoints(self.world, self.ego.get_location(), num_waypoints=1, step_distance=18.0)
             self.planner.set_route(available_waypoints)
-
-    def _get_lane_follow_steer(self, vehicle):
-        """沿当前车道waypoints计算转向角"""
-        loc = vehicle.get_location()
-        wp = self.map.get_waypoint(loc, project_to_road=True)
-        if not wp:
-            return 0.0
-
-        next_wps = wp.next(6.0)
-        if not next_wps:
-            return 0.0
-
-        target_loc = next_wps[0].transform.location
-
-        dx = target_loc.x - loc.x
-        dy = target_loc.y - loc.y
-        desired_yaw = math.atan2(dy, dx)
-
-        trans = vehicle.get_transform()
-        current_yaw = math.radians(trans.rotation.yaw)
-        yaw_err = desired_yaw - current_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-
-        steer = max(min(1.5 * yaw_err, 0.3), -0.3)
-        return steer
 
     def spawn(self):
         if not self.ego:
@@ -5062,8 +4562,10 @@ class StaticCarCrossScene(BaseScene):
             car = self.world.try_spawn_actor(wbp, tf)
 
             if car:
-                # self.cars.append(car)
+                self.cars.append(car)
                 self.actors.append(car)
+                angle = math.radians(yaw)
+                self.car_ctrls.append((math.cos(angle), math.sin(angle)))
 
                 # Apply GA-optimized parameters to this NPC
                 if self.ga_params:
@@ -5103,14 +4605,6 @@ class StaticCarCrossScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
-        else:
-            # 非TCP模式（behavior）：沿车道waypoints直行
-            ego_steer = self._get_lane_follow_steer(self.ego)
-            ego_ctrl = carla.VehicleControl()
-            ego_ctrl.throttle = 0.45
-            ego_ctrl.steer = ego_steer
-            ego_ctrl.brake = 0.0
-            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement with GA integration ----
         config = get_collision_enhance_config()

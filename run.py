@@ -60,7 +60,7 @@ SCENE_CLASSES = {
     '4b': CarCutOutScene,
     '4c': CarOncomingPassScene,
     '4d': CarStopandGoScene,
-    '5a': BicycleCrossScene,
+    '5a': PedestrianCrossScene,
     '5b': BicycleCrossScene,
     '5c': CarCutOutandStaticScene,
     '5d': CarGoandStopScene,
