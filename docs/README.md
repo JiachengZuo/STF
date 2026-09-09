@@ -5,7 +5,7 @@
 > 场景专项文档：[2.b 环形路口快速运行](scenarios/2b_roundabout/run_existing.md) ·
 > [2.b 完整说明](scenarios/2b_roundabout/README.md) ·
 > [全部场景索引](scenarios/README.md)
-> [TCP权重链接]((https://drive.google.com/drive/folders/19ZsHo_-98nbQcHDJL8_bEWX7xE-iHP6m?usp=sharing))
+> [TCP权重链接](https://drive.google.com/drive/folders/19ZsHo_-98nbQcHDJL8_bEWX7xE-iHP6m?usp=sharing)
 
 ---
 
