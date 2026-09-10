@@ -423,6 +423,13 @@ class CarCutOutandStaticScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
+        else:
+            # Fallback: basic forward control when TCP not active (camera not ready, etc.)
+            ego_ctrl = carla.VehicleControl()
+            ego_ctrl.throttle = 0.45
+            ego_ctrl.steer = 0.0
+            ego_ctrl.brake = 0.0
+            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -684,7 +691,7 @@ class CarOncomingPassScene(BaseScene):
                 if not car.is_alive:
                     continue
                 control = carla.VehicleControl()
-                control.throttle = min(1.0, adj_throttle * boost)
+                control.throttle = min(0.3, adj_throttle * boost)
                 control.brake = 0.0
                 car_wp = self.map.get_waypoint(car.get_location(), project_to_road=True)
 
@@ -1469,7 +1476,14 @@ class PedestrianCrossScene(BaseScene):
             self.ego.apply_control(self.control)
 
             current = self.ego.get_control()
-            print(f"[TCP] throttle={current.throttle:.2f} steer={current.steer:.2f}")
+            # print(f"[TCP] throttle={current.throttle:.2f} steer={current.steer:.2f}")
+        else:
+            # Fallback: basic forward control when TCP not active (camera not ready, etc.)
+            ego_ctrl = carla.VehicleControl()
+            ego_ctrl.throttle = 0.45
+            ego_ctrl.steer = 0.0
+            ego_ctrl.brake = 0.0
+            self.ego.apply_control(ego_ctrl)
 
         # 行人触发逻辑 (collision-enhanced)
         config = get_collision_enhance_config()
@@ -1598,6 +1612,13 @@ class OccludedPedestrianScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
+        else:
+            # Fallback: basic forward control when TCP not active (camera not ready, etc.)
+            ego_ctrl = carla.VehicleControl()
+            ego_ctrl.throttle = 0.45
+            ego_ctrl.steer = 0.0
+            ego_ctrl.brake = 0.0
+            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -1713,6 +1734,13 @@ class StaticPedestrianCrossScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
+        else:
+            # Fallback: basic forward control when TCP not active (camera not ready, etc.)
+            ego_ctrl = carla.VehicleControl()
+            ego_ctrl.throttle = 0.45
+            ego_ctrl.steer = 0.0
+            ego_ctrl.brake = 0.0
+            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -1829,6 +1857,13 @@ class StaticObstacleScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
+        else:
+            # Fallback: basic forward control when TCP not active (camera not ready, etc.)
+            ego_ctrl = carla.VehicleControl()
+            ego_ctrl.throttle = 0.45
+            ego_ctrl.steer = 0.0
+            ego_ctrl.brake = 0.0
+            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -1931,6 +1966,13 @@ class BicycleCrossScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
+        else:
+            # Fallback: basic forward control when TCP not active (camera not ready, etc.)
+            ego_ctrl = carla.VehicleControl()
+            ego_ctrl.throttle = 0.45
+            ego_ctrl.steer = 0.0
+            ego_ctrl.brake = 0.0
+            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -2041,6 +2083,13 @@ class CarStopandGoScene(BaseScene):
             self.control.brake = 0.0
             self.control.hand_brake = False
             self.ego.apply_control(self.control)
+        else:
+            # Fallback: basic forward control when TCP not active (camera not ready, etc.)
+            ego_ctrl = carla.VehicleControl()
+            ego_ctrl.throttle = 0.45
+            ego_ctrl.steer = 0.0
+            ego_ctrl.brake = 0.0
+            self.ego.apply_control(ego_ctrl)
 
         # ---- Collision enhancement ----
         config = get_collision_enhance_config()
@@ -4808,6 +4857,14 @@ class CarCrossScene(BaseScene):
         time.sleep(0.2)
         self.world.tick()
 
+        if self.tcp_flag:
+            print("[TCP] 模型已加载，启用TCP控制")
+            self.spawn_camera()
+            self.world.tick()
+        else:
+            self.ego.set_autopilot(True)
+            self.world.tick()
+
         # ---- Collision enhancement: run GA optimization for NPC states ----
         config = get_collision_enhance_config()
         ego_loc = self.ego.get_location()
@@ -5013,6 +5070,14 @@ class StaticCarCrossScene(BaseScene):
             raise RuntimeError("自车生成失败！")
         time.sleep(0.2)
         self.world.tick()
+
+        if self.tcp_flag:
+            print("[TCP] 模型已加载，启用TCP控制")
+            self.spawn_camera()
+            self.world.tick()
+        else:
+            self.ego.set_autopilot(True)
+            self.world.tick()
 
         # ---- Collision enhancement: run GA optimization for NPC states ----
         config = get_collision_enhance_config()

@@ -1,0 +1,45 @@
+{
+  "1d": {
+    "route_01": [
+      {
+        "name": "scenario_1_0013",
+        "ego_start": {
+          "x": "-340.95",
+          "y": "231.03",
+          "z": "8.73",
+          "yaw": "-167.17"
+        },
+        "ego_route": [],
+        "weather": {
+          "cloudiness": 10.0,
+          "dust_storm": 0.0,
+          "fog_density": 28,
+          "fog_distance": 45,
+          "fog_falloff": 1.0,
+          "mie_scattering_scale": 0.03,
+          "precipitation": 33,
+          "precipitation_deposits": 52,
+          "rayleigh_scattering_scale": 0.0331,
+          "scattering_intensity": 0.33,
+          "sun_altitude_angle": 20.0,
+          "sun_azimuth_angle": 120.0,
+          "wetness": 76,
+          "wind_intensity": 46
+        },
+        "trigger_position": {
+          "pitch": "0.0",
+          "x": "-364.40",
+          "y": "226.36",
+          "yaw": "-170.08",
+          "z": "8.28"
+        },
+        "trigger_radius": 2.0,
+        "other_actors": {
+          "center": []
+        },
+        "timeout": 60.0,
+        "active": true
+      }
+    ]
+  }
+}

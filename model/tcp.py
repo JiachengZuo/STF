@@ -144,7 +144,10 @@ class TCPAgent(BasePolicy):
         self.alpha = 0.3  # 控制融合权重
         self.step_count = [0] * 1
         self.last_debug = {}
-        
+
+        # Eager-load the model to avoid stalling the main loop on the first tick.
+        self.load_model()
+
     def set_ego_and_route(self, ego_vehicles, info, static_obs=None):
         """
         设置ego车辆和路线信息
@@ -351,9 +354,6 @@ class TCPAgent(BasePolicy):
         Returns:
             actions: 动作数组 [[throttle, steer, brake], ...]
         """
-        if self.net is None:
-            self.load_model()
-        
         actions = []
         
 

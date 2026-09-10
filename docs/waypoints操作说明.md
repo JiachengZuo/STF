@@ -88,7 +88,7 @@ python 文件名.py  # 替换为你的编辑器程序文件名（如carla_map_ed
 若需自定义CARLA服务器地址、地图、场景编号等，执行以下命令：
 
 ```bash
-python tools/waypoints.py --name roadside_1 --scenario 1 --save_dir ./save_scenarios
+python waypoints.py --name roadside_1 --scenario 1 --save_dir ./save_scenarios_3
 ```
 
 参数说明（核心常用）：
@@ -110,7 +110,7 @@ python tools/waypoints.py --name roadside_1 --scenario 1 --save_dir ./save_scena
 ### 基础运行
 
 ```bash
-python run.py --input_dir ./save_scenarios/ --town Town10HD_Opt --scenario 3a
+python run.py --input_dir ./save_scenarios_3/ --town roadside_1 --scenario 4c
 ```
 
 ### 带碰撞增强运行（推荐）

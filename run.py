@@ -44,7 +44,7 @@ PORT = 2000
 FPS = 20
 
 SCENE_CLASSES = {
-    '1d': MotorVehicleTrafficLightScene,
+    '1d': PedestrianCrossScene,
     '3a': PedestrianCrossScene,
     '2b': EgoRouteFollowScene,
     '2c': CarCrossScene,
@@ -1082,6 +1082,9 @@ def main():
                         help='Cyclist ratio; the remainder are pedestrians')
     parser.add_argument('--resume', action='store_true', default=False,
                         help='Skip scenarios that already have durable results')
+    parser.add_argument('--max_scenario_time', type=float, default=120.0,
+                        help='Maximum wall-clock seconds per scenario (default: 120)')
+
     parser.add_argument(
         '--headless', action='store_true',
         help=('Render Pygame off-screen without creating or focusing a visible '
@@ -1092,7 +1095,7 @@ def main():
     # The repository Behavior controller is a non-interactive screening
     # baseline.  Always keep its Pygame visualizer off-screen, including when
     # run.py is invoked directly without the launcher-provided flag.
-    if args.model == "behavior":
+    if args.model in ("behavior", "tcp"):
         args.headless = True
     if args.max_invalid_retries < 0:
         parser.error('--max_invalid_retries must be zero or greater')
@@ -1126,7 +1129,7 @@ def main():
         print("❌ No scenarios found")
         return
 
-    if args.scenario == '1d':
+    if args.scenario == '':
         signal_configs = []
         for path in scenario_files:
             document = load_scenario_document(path)
@@ -1492,6 +1495,9 @@ def main():
         ego_x = ego_y = ego_z = 0.0
         ego_roll = ego_pitch = ego_yaw = 0.0
         current_game_time = 0.0
+        scenario_start_time = time.time()
+        stuck_start_time = None
+        stuck_check_position = scene.ego.get_location()
 
         while running:
             for e in pygame.event.get():
@@ -1500,6 +1506,27 @@ def main():
 
             if not scene.tick():
                 running = False
+
+            # Guard: global wall-clock timeout per scenario
+            elapsed_total = time.time() - scenario_start_time
+            if elapsed_total > args.max_scenario_time:
+                print(f"[TIMEOUT] Scenario exceeded {args.max_scenario_time}s limit")
+                running = False
+                break
+
+            # Guard: stuck-vehicle detection (ego hasn't moved 0.5m for 10s)
+            current_pos = scene.ego.get_location()
+            moved = current_pos.distance(stuck_check_position)
+            if moved < 0.5:
+                if stuck_start_time is None:
+                    stuck_start_time = time.time()
+                elif time.time() - stuck_start_time > 10.0:
+                    print("[TIMEOUT] Ego vehicle stuck for 10s, ending scenario")
+                    running = False
+                    break
+            else:
+                stuck_start_time = None
+                stuck_check_position = current_pos
 
             trans = scene.ego.get_transform()
             vel = scene.ego.get_velocity()
