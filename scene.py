@@ -673,15 +673,26 @@ class CarOncomingPassScene(BaseScene):
                     car_wp = self.map.get_waypoint(car.get_location(), project_to_road=True)
                     if car_wp:
                         self.original_lane_ids[idx] = car_wp.lane_id
-                        # 从NPC视角找借道车道：相邻的任意Driving车道
-                        right = car_wp.get_right_lane()
-                        left = car_wp.get_left_lane()
-                        if right and right.lane_type == carla.LaneType.Driving:
-                            self.cut_direction[idx] = 1
-                        elif left and left.lane_type == carla.LaneType.Driving:
-                            self.cut_direction[idx] = -1
+
+                        # 用几何方法确定借道方向（ego在NPC的左侧还是右侧）
+                        # 避免单车道双向路上get_left_lane/get_right_lane都返回None
+                        wp_tf = car_wp.transform
+                        right_vec = wp_tf.get_right_vector()
+                        ego_loc = self.ego.get_location()
+                        car_loc = car.get_location()
+                        to_ego_x = ego_loc.x - car_loc.x
+                        to_ego_y = ego_loc.y - car_loc.y
+                        dot = right_vec.x * to_ego_x + right_vec.y * to_ego_y
+                        if dot > 0.5:
+                            self.cut_direction[idx] = 1   # ego在NPC右侧，向右借道
+                        elif dot < -0.5:
+                            self.cut_direction[idx] = -1  # ego在NPC左侧，向左借道
                         else:
-                            self.cut_direction[idx] = 0
+                            # 夹角判断法兜底：用NPC朝向的侧向偏角
+                            forward_vec = wp_tf.get_forward_vector()
+                            # ego在NPC左侧：right_vec与to_ego叉积为负
+                            cross = forward_vec.x * to_ego_y - forward_vec.y * to_ego_x
+                            self.cut_direction[idx] = 1 if cross < 0 else -1
                     else:
                         self.cut_direction[idx] = 0
                     self.state[idx] = 1
@@ -736,8 +747,10 @@ class CarOncomingPassScene(BaseScene):
                         if car_wp.lane_id == self.original_lane_ids[idx]:
                             self.state[idx] = 4
                         else:
-                            # 从NPC当前位置的相邻车道中找lane_id匹配的原车道
                             return_wp = None
+
+                            # 先尝试从NPC当前位置的相邻车道中找lane_id匹配的原车道
+                            # (用于同方向多车道场景)
                             right = car_wp.get_right_lane()
                             left = car_wp.get_left_lane()
                             if right and right.lane_id == self.original_lane_ids[idx]:
@@ -752,13 +765,26 @@ class CarOncomingPassScene(BaseScene):
                                 if ahead:
                                     control.steer = self._steer_to_target(car, ahead[0].transform.location, 0.5)
                                 else:
-                                    control.steer = -0.18 * self.cut_direction[idx]
+                                    control.steer = -0.6 * self.cut_direction[idx]
                             else:
-                                control.steer = -0.18 * self.cut_direction[idx]
+                                # 跨中心线场景：从NPC自身朝向前方计算返回目标点
+                                # lane_width取car_wp的宽度，在NPC前进方向基础上横向偏移
+                                trans = car.get_transform()
+                                yaw_rad = math.radians(trans.rotation.yaw)
+                                lane_w = car_wp.lane_width
+                                # 前进方向6m + 横向偏移（返回方向）一个车道宽
+                                fwd_x = trans.location.x + 6.0 * math.cos(yaw_rad)
+                                fwd_y = trans.location.y + 6.0 * math.sin(yaw_rad)
+                                # 返回方向：与借道方向相反，即 -cut_direction
+                                return_dir = -self.cut_direction[idx]
+                                lat_x = return_dir * lane_w * math.cos(yaw_rad + math.pi / 2)
+                                lat_y = return_dir * lane_w * math.sin(yaw_rad + math.pi / 2)
+                                target_loc = carla.Location(fwd_x + lat_x, fwd_y + lat_y, trans.location.z)
+                                control.steer = self._steer_to_target(car, target_loc, 0.5)
                     else:
-                        control.steer = -0.18 * self.cut_direction[idx]
+                        control.steer = -0.6 * self.cut_direction[idx]
 
-                    if time.time() - self.trigger_time > 3.5:
+                    if time.time() - self.trigger_time > 5.0:
                         self.state[idx] = 4
 
                 elif self.state[idx] == 4:
@@ -766,7 +792,17 @@ class CarOncomingPassScene(BaseScene):
                     if car_wp and car_wp.lane_id == self.original_lane_ids[idx]:
                         control.steer = self._get_lane_follow_steer(car)
                     else:
-                        control.steer = 0.0
+                        # 尚未回到原车道，继续用横向偏移方式引导返回
+                        trans = car.get_transform()
+                        yaw_rad = math.radians(trans.rotation.yaw)
+                        lane_w = car_wp.lane_width if car_wp else 3.5
+                        fwd_x = trans.location.x + 8.0 * math.cos(yaw_rad)
+                        fwd_y = trans.location.y + 8.0 * math.sin(yaw_rad)
+                        return_dir = -self.cut_direction[idx]
+                        lat_x = return_dir * lane_w * math.cos(yaw_rad + math.pi / 2)
+                        lat_y = return_dir * lane_w * math.sin(yaw_rad + math.pi / 2)
+                        target_loc = carla.Location(fwd_x + lat_x, fwd_y + lat_y, trans.location.z)
+                        control.steer = self._steer_to_target(car, target_loc, 0.5)
 
                 car.apply_control(control)
 
@@ -1409,6 +1445,8 @@ class PedestrianCrossScene(BaseScene):
             self.planner.set_route(available_waypoints)
 
     def spawn(self):
+        # import pdb
+        # pdb.set_trace()
         if not self.ego:
             raise RuntimeError("自车生成失败！")
         time.sleep(0.2)
@@ -1425,7 +1463,8 @@ class PedestrianCrossScene(BaseScene):
             self.ego.set_autopilot(True)
             self.world.tick()
 
-        # 生成行人
+        # 生成行人（带Z高度重试，类似spawn_ego）
+
         bp_lib = self.world.get_blueprint_library()
         for cfg in self.config['other_actors']['center']:
             x = float(cfg['transform']['x'])
@@ -1433,13 +1472,28 @@ class PedestrianCrossScene(BaseScene):
             z = float(cfg['transform']['z'])
             yaw = float(cfg['transform']['yaw'])
             wbp = bp_lib.find('walker.pedestrian.0001')
-            tf = carla.Transform(carla.Location(x, y, z), carla.Rotation(yaw=yaw))
-            walker = self.world.try_spawn_actor(wbp, tf)
+            if not wbp:
+                print(f"[Walker] Blueprint walker.pedestrian.0001 not found, skip")
+                continue
+            # Z高度重试：地面高度可能因地图差异而偏移
+            walker = None
+            for dz in (0.0, 0.1, -0.1, 0.3, -0.3, 0.5, -0.5, 1.0, -1.0):
+                tf = carla.Transform(carla.Location(x, y, z + dz), carla.Rotation(yaw=yaw))
+                walker = self.world.try_spawn_actor(wbp, tf)
+                if walker:
+                    if dz != 0.0:
+                        print(f"[Walker] Spawned at z={z + dz:.1f} (config z={z:.1f}, offset={dz:+.1f})")
+                    else:
+                        print(f"[Walker] Spawning pedestrian at ({x}, {y}, {z})")
+                    break
+                time.sleep(0.05)
             if walker:
                 self.walkers.append(walker)
                 self.actors.append(walker)
                 angle = math.radians(yaw)
                 self.walker_ctrls.append((math.cos(angle), math.sin(angle)))
+            else:
+                print(f"[Walker] FAILED to spawn pedestrian at ({x}, {y}), all Z offsets tried")
 
     def spawn_camera(self):
         """ 挂载相机获取图像给 TCP 模型 """
@@ -1572,7 +1626,17 @@ class OccludedPedestrianScene(BaseScene):
 
             if actor_type == "person":
                 wbp = bp_lib.find('walker.pedestrian.0001')
-                walker = self.world.try_spawn_actor(wbp, tf)
+                if not wbp:
+                    print("[Occluded] Blueprint walker.pedestrian.0001 not found")
+                    continue
+                # Z高度重试
+                walker = None
+                for dz in (0.0, 0.1, -0.1, 0.3, -0.3, 0.5, -0.5, 1.0, -1.0):
+                    tf_z = carla.Transform(carla.Location(x, y, z + dz), carla.Rotation(yaw=yaw))
+                    walker = self.world.try_spawn_actor(wbp, tf_z)
+                    if walker:
+                        break
+                    time.sleep(0.05)
                 if walker:
                     self.walkers.append(walker)
                     self.actors.append(walker)
@@ -1700,8 +1764,16 @@ class StaticPedestrianCrossScene(BaseScene):
             z = float(cfg['transform']['z'])
             yaw = float(cfg['transform']['yaw'])
             wbp = bp_lib.find('walker.pedestrian.0001')
-            tf = carla.Transform(carla.Location(x, y, z), carla.Rotation(yaw=yaw))
-            walker = self.world.try_spawn_actor(wbp, tf)
+            if not wbp:
+                continue
+            # Z高度重试
+            walker = None
+            for dz in (0.0, 0.1, -0.1, 0.3, -0.3, 0.5, -0.5, 1.0, -1.0):
+                tf = carla.Transform(carla.Location(x, y, z + dz), carla.Rotation(yaw=yaw))
+                walker = self.world.try_spawn_actor(wbp, tf)
+                if walker:
+                    break
+                time.sleep(0.05)
             if walker:
                 self.walkers.append(walker)
                 self.actors.append(walker)

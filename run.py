@@ -44,8 +44,12 @@ PORT = 2000
 FPS = 20
 
 SCENE_CLASSES = {
+    '1a': PedestrianCrossScene,
+    '1b': PedestrianCrossScene,
+    '1c': PedestrianCrossScene,
     '1d': PedestrianCrossScene,
     '3a': PedestrianCrossScene,
+    '2a': PedestrianCrossScene,
     '2b': EgoRouteFollowScene,
     '2c': CarCrossScene,
     '2d': CarCrossScene,
@@ -1363,6 +1367,7 @@ def main():
                 raise ValueError("Unsupported scenario: {}".format(args.scenario))
             scene = scene_class(
                 client, world, cfg_path, args.town, args.route_id, args.model, args.model_path)
+
             scene.spawn()
             npc_actors = spawn_traffic_npcs(
                 world, client, args.npc_total,

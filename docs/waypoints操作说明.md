@@ -88,7 +88,7 @@ python 文件名.py  # 替换为你的编辑器程序文件名（如carla_map_ed
 若需自定义CARLA服务器地址、地图、场景编号等，执行以下命令：
 
 ```bash
-python waypoints.py --name roadside_1 --scenario 1 --save_dir ./save_scenarios_3
+python waypoints.py --name 4c --scenario 1 --save_dir ./save_scenarios_4c
 ```
 
 参数说明（核心常用）：
@@ -110,7 +110,7 @@ python waypoints.py --name roadside_1 --scenario 1 --save_dir ./save_scenarios_3
 ### 基础运行
 
 ```bash
-python run.py --input_dir ./save_scenarios_3/ --town roadside_1 --scenario 4c
+python run.py --input_dir ./save_scenarios_1d/ --town 1d --scenario 1d
 ```
 
 ### 带碰撞增强运行（推荐）
@@ -162,7 +162,7 @@ python run.py --input_dir ./save_scenarios/ --town Town10HD_Opt --scenario 3a --
 示例 — 生成20个NPC，包含汽车、自行车和行人：
 
 ```bash
-python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 2b --npc_total 20 --npc_car_ratio 0.50 --npc_cyclist_ratio 0.30
+python run.py --input_dir ./save_scenarios_4c/ --town roadside_1 --scenario 4c --npc_total 20 --npc_car_ratio 0.50 --npc_cyclist_ratio 0.30
 ```
 
 示例 — 只生成行人（适合行人场景测试）：
@@ -174,7 +174,7 @@ python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a --
 示例 — 生成大量车辆交通流：
 
 ```bash
-python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 4a --npc_total 30 --npc_car_ratio 0.90 --npc_cyclist_ratio 0.0
+python run.py --input_dir ./save_scenarios_1d/ --town 1d --scenario 1d --npc_total 30 --npc_car_ratio 0.90 --npc_cyclist_ratio 0.0 --model tcp --resume
 ```
 
 > **注意**：`npc_total=0`（默认）时不生成任何环境NPC，仅在场景本身定义的agent参与测试。
