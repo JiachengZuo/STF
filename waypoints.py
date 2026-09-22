@@ -140,9 +140,7 @@ class CarlaMapEditor0916:
         self.world = self.client.get_world()
         self.map = self.world.get_map()
         normalized_scenario = str(scenario).lower().replace(".", "")
-        self.town_name = (
-            self._resolve_loaded_map_name(self.map, town_name)
-            if normalized_scenario == "2b" else town_name)
+        self.town_name = self._resolve_loaded_map_name(self.map, town_name)
 
         # ======================
         # ✅ 8 大天气类型 × 每种 8 个强度 = 64 种天气
@@ -549,8 +547,11 @@ class CarlaMapEditor0916:
         self.trigger_point = None
         self.ego_point = None
         self.actor_points = []
+        self.opposite_points = []
+        self.ego_steer_target_point = None  # ego自动驾驶目标点（单个）
         self.selected_agent_idx = -1
         self.selected_mode = None
+        self.agent_placement_mode = "center"  # "center" | "opposite" | "target"
         self.ego_route_points = []
         # 2.b keeps the existing single-editor workflow.  Route ownership is
         # determined by the currently selected VUT/VT1; VT2 has no route.
@@ -639,9 +640,11 @@ class CarlaMapEditor0916:
     def _resolve_loaded_map_name(carla_map, requested_name):
         """Fail early instead of writing JSON under the wrong CARLA map key."""
         loaded_name = str(getattr(carla_map, "name", "")).rstrip("/").rsplit("/", 1)[-1]
-        requested_basename = str(requested_name).rstrip("/").rsplit("/", 1)[-1]
         if not loaded_name:
             raise RuntimeError("无法读取CARLA当前地图名；不能创建可审计的场景配置。")
+        if requested_name is None:
+            return loaded_name
+        requested_basename = str(requested_name).rstrip("/").rsplit("/", 1)[-1]
         if loaded_name.lower() != requested_basename.lower():
             raise RuntimeError(
                 "编辑器地图不一致：CARLA当前加载 {!r}，但--name为 {!r}；"
@@ -6023,6 +6026,37 @@ class CarlaMapEditor0916:
             dy = -math.sin(yaw) * 18
             pygame.draw.line(self.screen, color, (x, y), (x + dx, y + dy), 2)
 
+        # 对向车道直行车辆标记（橙色渲染，用于区分）
+        for i, p in enumerate(self.opposite_points):
+            x, y = self.world_to_screen(p['x'], p['y'])
+            if not self._screen_point_visible((x, y), margin=200):
+                continue
+            atype = p.get("type", "car")
+            color = (255, 165, 0)  # 橙色
+            prefix = "OPPO-CAR"
+            pygame.draw.circle(self.screen, color, (x, y), 10)
+            if self._roundabout_map_labels_visible():
+                self.screen.blit(self.font.render(prefix, True, color), (x + 12, y))
+            yaw = math.radians(p['yaw'])
+            dx = math.cos(yaw) * 18
+            dy = -math.sin(yaw) * 18
+            pygame.draw.line(self.screen, color, (x, y), (x + dx, y + dy), 2)
+
+        # ego自动驾驶目标点标记（绿色渲染）
+        if self.ego_steer_target_point is not None:
+            p = self.ego_steer_target_point
+            x, y = self.world_to_screen(p['x'], p['y'])
+            if self._screen_point_visible((x, y), margin=200):
+                color = (0, 255, 0)  # 绿色
+                pygame.draw.circle(self.screen, color, (x, y), 12, 2)
+                pygame.draw.circle(self.screen, color, (x, y), 4)
+                if self._roundabout_map_labels_visible():
+                    self.screen.blit(self.font.render("TARGET", True, color), (x + 14, y - 6))
+                yaw = math.radians(p['yaw'])
+                dx = math.cos(yaw) * 22
+                dy = -math.sin(yaw) * 22
+                pygame.draw.line(self.screen, color, (x, y), (x + dx, y + dy), 2)
+
         if self.is_roundabout_2b:
             self._draw_roundabout_panel()
 
@@ -7407,16 +7441,33 @@ class CarlaMapEditor0916:
     # ======================
     def save_single(self, weather_name, level_idx, weather_params):
         actors = []
+        model_map = {
+            "person": "walker.pedestrian.0001",
+            "bike": "vehicle.diamondback.century",
+            "car": "vehicle.tesla.model3",
+            "obstacle": "static.prop.container"
+        }
         for p in self.actor_points:
             atype = p.get("type", "person")
-            model_map = {
-                "person": "walker.pedestrian.0001",
-                "bike": "vehicle.diamondback.century",
-                "car": "vehicle.tesla.model3",
-                "obstacle": "static.prop.container"
-            }
             model = model_map[atype]
             actors.append({
+                "type": atype, "model": model,
+                "transform": {
+                    "pitch": "0.00",
+                    "x": f"{round(p['x'],2):.2f}",
+                    "y": f"{round(p['y'],2):.2f}",
+                    "yaw": f"{round(p['yaw'],2):.2f}",
+                    "z": f"{round(p['z'],2):.2f}"
+                },
+                "rolename": atype, "autopilot": True
+            })
+
+        # 对向车道直行车辆
+        opposite_actors = []
+        for p in self.opposite_points:
+            atype = p.get("type", "car")
+            model = model_map.get(atype, "vehicle.tesla.model3")
+            opposite_actors.append({
                 "type": atype, "model": model,
                 "transform": {
                     "pitch": "0.00",
@@ -7453,9 +7504,15 @@ class CarlaMapEditor0916:
                         "z": f"{round(self.trigger_point['z'],2):.2f}"
                     },
                     "trigger_radius": 2.0,
-                    "other_actors": {"center": actors},
+                    "other_actors": {"center": actors, "opposite": opposite_actors},
                     "timeout": 60.0,
-                    "active": True
+                    "active": True,
+                    "ego_steer_target": {
+                        "x": f"{round(self.ego_steer_target_point['x'],2):.2f}",
+                        "y": f"{round(self.ego_steer_target_point['y'],2):.2f}",
+                        "z": f"{round(self.ego_steer_target_point['z'],2):.2f}",
+                        "yaw": f"{round(self.ego_steer_target_point['yaw'],2):.2f}"
+                    } if self.ego_steer_target_point is not None else None,
                 }]
             }
         }
@@ -7494,6 +7551,9 @@ class CarlaMapEditor0916:
         self.trigger_point = None
         self.ego_point = None
         self.actor_points.clear()
+        self.opposite_points.clear()
+        self.ego_steer_target_point = None
+        self.agent_placement_mode = "center"
         self.selected_agent_idx = -1
         self.selected_mode = None
         if self.is_roundabout_2b:
@@ -7545,6 +7605,27 @@ class CarlaMapEditor0916:
                           else "VT2保持静止，不能绘制路线。")
                 self._feedback("已选中{}；{}".format(role, suffix))
             return
+        # 检查是否选中了opposite_points中的对向车辆
+        sel_idx = -1
+        min_dist = 999
+        for i, p in enumerate(self.opposite_points):
+            d = (p['x']-wx)**2 + (p['y']-wy)**2
+            selection_limit = 10/(self.zoom+0.01)
+            if d < min_dist and d < selection_limit:
+                min_dist = d
+                sel_idx = i
+        if sel_idx >= 0:
+            self.selected_agent_idx = sel_idx
+            self.selected_mode = 'opposite_agent'
+            self._feedback("已选中对向车道直行车辆 (OPPO-CAR)。")
+            return
+        # 检查是否选中了ego目标点
+        if self.ego_steer_target_point is not None:
+            d = (self.ego_steer_target_point['x'] - wx)**2 + (self.ego_steer_target_point['y'] - wy)**2
+            if d < 15 / (self.zoom + 0.01):
+                self.selected_mode = 'steer_target'
+                self._feedback("已选中ego自动驾驶目标点 (TARGET)。")
+                return
         if self.trigger_point and not self.is_roundabout_2b:
             d = (self.trigger_point['x']-wx)**2 + (self.trigger_point['y']-wy)**2
             if d < 15/(self.zoom+0.01):
@@ -7664,6 +7745,12 @@ class CarlaMapEditor0916:
             del self.actor_points[self.selected_agent_idx]
             if self.is_roundabout_2b and deleted_role == "vt1":
                 self._invalidate_roundabout_route("vt1")
+        elif self.selected_mode == 'opposite_agent' and 0 <= self.selected_agent_idx < len(self.opposite_points):
+            deleted = "OPPO-CAR"
+            del self.opposite_points[self.selected_agent_idx]
+        elif self.selected_mode == 'steer_target':
+            self.ego_steer_target_point = None
+            deleted = "TARGET"
         self.selected_agent_idx = -1
         self.selected_mode = None
         self._mark_roundabout_dirty()
@@ -7785,6 +7872,16 @@ class CarlaMapEditor0916:
                         if event.key == pygame.K_6: self.set_agent_type("bike")
                         if event.key == pygame.K_7: self.set_agent_type("car")
                         if event.key == pygame.K_8: self.set_agent_type("obstacle")
+                    if not self.is_roundabout_2b and event.key == pygame.K_o:
+                        if self.agent_placement_mode == "center":
+                            self.agent_placement_mode = "opposite"
+                            self._feedback("已切换到对向车道模式：右键放置对向直行车辆。")
+                        elif self.agent_placement_mode == "opposite":
+                            self.agent_placement_mode = "target"
+                            self._feedback("已切换到目标点模式：右键放置ego自动驾驶目标点（仅一个）。")
+                        else:
+                            self.agent_placement_mode = "center"
+                            self._feedback("已切换到center模式：右键放置横穿车辆。")
                     if event.key == pygame.K_DELETE: self.delete_selected()
 
                 if event.type == pygame.MOUSEWHEEL:
@@ -7870,11 +7967,19 @@ class CarlaMapEditor0916:
                                 cx, cy = self.screen_to_world(sx, sy)
                                 z = self.ego_point['z'] if self.ego_point else self.get_ground_z(cx, cy)
                                 wp = self.get_nearest_waypoint(cx, cy)
-                                self.actor_points.append({
+                                point = {
                                     'x': cx, 'y': cy, 'z': z,
                                     'yaw': wp.transform.rotation.yaw,
-                                    'type': 'person'
-                                })
+                                    'type': 'car' if self.agent_placement_mode == 'opposite' else 'person'
+                                }
+                                if self.agent_placement_mode == 'opposite':
+                                    self.opposite_points.append(point)
+                                    self._feedback("已在对向车道添加直行车辆标记。")
+                                elif self.agent_placement_mode == 'target':
+                                    self.ego_steer_target_point = point
+                                    self._feedback("已放置ego自动驾驶目标点（仅保留一个，再次右键可移动）。")
+                                else:
+                                    self.actor_points.append(point)
 
                 if event.type == pygame.MOUSEBUTTONUP:
                     if event.button == 2:
@@ -7895,7 +8000,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=2000)
-    parser.add_argument('--name', default='TOWN10HD_Opt')
+    parser.add_argument('--name', default=None, help='Town name (default: auto-detect from CARLA)')
     parser.add_argument('--scenario', default='1')
     parser.add_argument('--save_dir', default='output')
     parser.add_argument('--maneuver', choices=MANEUVERS, default='straight')
