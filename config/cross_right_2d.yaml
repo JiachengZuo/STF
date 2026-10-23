@@ -1,0 +1,43 @@
+schema_version: 1
+host: 127.0.0.1
+port: 2000
+town: ""
+baseline_dir: save_scenarios/2d/baselines
+input_dir: ~/STF/SMap/STF_config/save_scenarios_2d
+output_root: runs/cross_right_2d
+model_path: tcp/best_model.ckpt
+ego_blueprint: vehicle.tesla.model3
+target_blueprint: vehicle.tesla.model3
+target_speed_kmh: 20.0
+ttc_window_s: [4.5, 5.5]
+section_speed_limit_kmh: 40.0
+lane_width_m: [3.0, 3.5]
+entry_speeds_kmh: [5, 10, 15, 20, 25, 30, 35, 40]
+engineering:
+  fixed_delta_seconds: 0.05
+  stop_speed_mps: 0.15
+  entry_speed_tolerance_kmh: 2.0  # Formal TTC-window check, shared by both algorithms.
+  speed_hold_tolerance_kmh: 1.0  # Initial-state preparation.
+  speed_hold_confirm_s: 1.0  # Initialization only; formal entry checks measured speed.
+  speed_hold_throttle_gain: 0.35
+  speed_hold_throttle_max: 0.6
+  speed_hold_brake_gain: 0.5
+  speed_hold_brake_max: 1.0
+  reference_brake_decel_mps2: 3.0
+  reference_throttle_accel_mps2: 2.0
+  spawn_lift_m: 0.35
+  straight_window_m: 20.0  # Optional width sampling neighbourhood; not a route-length requirement.
+  arm_heading_cluster_deg: 25.0  # Recorded map observation only; no required arm count.
+  right_side_sample_m: 8.0
+  exit_gate_m: 15.0
+  boundary_tolerance_m: 0.25
+  max_heading_error_deg: 20.0
+  target_lateral_tolerance_m: 0.75
+  target_speed_grace_s: 1.0
+  kinematic_half_width_m: 1.75
+  kinematic_overhang_m: 2.5
+  signal_lateral_m: 8.0
+  signal_longitudinal_window_m: 40.0
+  timeout_margin_s: 45.0
+  min_timeout_s: 120.0
+  camera_timeout_s: 2.0

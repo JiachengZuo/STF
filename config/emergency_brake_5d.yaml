@@ -1,0 +1,34 @@
+schema_version: 1
+# Algorithm-independent engineering coverage: low / medium / high.
+test_speeds_kmh: [10, 20, 30, 40, 50, 60, 80]
+# Optional run annotations; never filter or constrain library generation.
+ads_vmax_kmh:
+  behavior: null
+  tcp: null
+host: 127.0.0.1
+port: 2000
+baseline_dir: save_scenarios/5d/baselines
+input_dir: save_scenarios/5d/definitions_brake_calibrated_20260920
+output_root: runs/emergency_brake_5d
+model_path: tcp/best_model.ckpt
+engineering:
+  # 5d: continuous stable following for at least 3 s.
+  stable_follow_duration_s: 3.0
+  setup_timeout_s: 90.0
+  trial_timeout_s: 30.0
+  camera_timeout_s: 2.0
+  # GB/T 41798 target-object speed-control accuracy is +/-2 km/h.
+  speed_tolerance_kmh: 2.0
+  # Numerical threshold used only to detect that a simulated vehicle stopped.
+  stop_speed_threshold_kmh: 0.36
+  deceleration_target_mps2: 6.0
+  deceleration_ramp_s: 1.0
+  # Target vehicle only: stock Model 3's 700 Nm/wheel produces about 4.1 m/s2.
+  lead_max_brake_torque_nm: 1400.0
+  lead_brake_feedforward: 0.8
+  brake_kp: 0.06
+  # 5d-only fixed initial bumper-to-bumper gap; independent of speed.
+  initial_net_gap_m: 20.0
+  vehicle_length_allowance_m: 5.0
+  reserve_m: 10.0
+  straight_tolerance_deg: 3.0

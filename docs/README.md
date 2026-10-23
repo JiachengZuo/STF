@@ -36,6 +36,8 @@
 
 3. （可选）如果使用 TCP 模型控制，需要准备 `tcp/best_model.ckpt`。
 
+下文的 Python 启动命令均在 **STF 仓库根目录**（包含 `run.py` 和 `waypoints.py` 的目录）执行。`./save_scenarios_3a` 等相对路径以终端当前目录为基准。
+
 ---
 
 ## waypoints.py — 场景编辑器
@@ -172,24 +174,34 @@ save_scenarios/
 
 ## run.py — 场景运行器
 
-遍历 `save_scenarios/` 目录下所有场景 JSON 文件，依次在 CARLA 中运行并录制视频。
+当前兼容分支沿用 Jiacheng main 的通用运行器：读取 `--input_dir` 指定目录当前层的 `scenario_*.json`，依次在 CARLA 中运行并录制视频；不递归搜索子目录。
+
+若 JSON 位于多层子目录中，`--input_dir` 应指向直接包含 JSON 的那一层；目录可以使用任意名称，无须命名为 `definitions`。`--scenario 3a` 选择场景类型，不要求文件名以 `scenario_3a_` 开头。
 
 ### 启动方式
 
 ```bash
 # 运行指定场景类型（默认 behavior 模式，使用 CARLA 自动驾驶）
-python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a
+python3 run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a
 
 # 运行指定场景，使用 TCP 模型控制
-python run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a --model tcp --model_path ./tcp/best_model.ckpt
+python3 run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a --model tcp --model_path ./tcp/best_model.ckpt
 
-# 切换地图和场景
-python run.py --input_dir ./save_scenarios/ --town center --scenario 2b
+# 在已加载的 center 地图上运行 2b（配置要求见 2.b 专项文档）
+python3 run.py --input_dir ./save_scenarios/ --town center --scenario 2b
 ```
+
+例如，将 3a 配置直接放在 `STF/save_scenarios_3a/` 下，配置中的地图键为 `3a` 时，在 STF 根目录执行：
+
+```bash
+python3 run.py --input_dir ./save_scenarios_3a --town 3a --scenario 3a --npc_total 20 --npc_car_ratio 0.50 --npc_cyclist_ratio 0.30 --resume
+```
+
+通用运行器使用 CARLA 当前已加载的地图，`--town` 用于选取 JSON 中对应的地图配置；运行前应确认两者一致。参数名须完整写为 `--input_dir`、`--town`。
 
 | 参数 | 说明 | 默认值 |
 |---|---|---|
-| `--town` | CARLA 地图名称 | 必填 |
+| `--town` | JSON 中的地图键，应与 CARLA 已加载地图一致 | 必填 |
 | `--route_id` | 路由 ID | `route_01` |
 | `--input_dir` | 场景 JSON 文件目录 | 必填 |
 | `--scenario` | 场景类型编码 | `3a` |
@@ -234,7 +246,7 @@ python run.py --input_dir ./save_scenarios/ --town center --scenario 2b
 
 ### 实时可视化界面
 
-运行时会弹出一个窗口，左侧为鸟瞰图（BEV），右侧为前视相机画面：
+当前通用运行器在 behavior 和 tcp 模式下均采用离屏渲染，不弹出窗口，仍然录制视频。视频左侧为鸟瞰图（BEV），右侧为前视相机画面：
 
 ```
 ┌────────────────────┬────────────────────┐
@@ -331,21 +343,24 @@ videos/
 
 `--resume` ：启用断点恢复（默认关闭）
 ### 运行机制
-`保存`：每完成一个场景，自动将已完成场景集合 + 测试记录写入{scenario}_checkpoint.pkl，同时增量更新 {scenario}_result.pkl。
+`保存`：通用运行器每完成一个场景，更新 `{scenario}_result.json`，并输出对应的 CSV、PKL 和 Markdown 结果文件。
 
 `恢复`：再次运行加上 --resume 参数，程序会：
-  1. 检查 {scenario}_checkpoint.pkl 是否存在
-  2. 如果存在，读取已完成的场景名称集合和已有记录
-  3. 跳过已完成的场景，从下一个未完成的场景继续运行
+  1. 从当前输出目录的 `{scenario}_result.json` 读取已有记录
+  2. 按记录中的场景名称确定已完成项（2.b 只跳过已有有效试验结果的场景）
+  3. 跳过已完成项，继续运行剩余场景
   4. 新完成的场景追加到记录中
 
 ###  使用方式
+
+在 STF 仓库根目录执行，恢复时沿用首次运行的输入目录、场景编号和输出目录：
+
 ```bash
-  # 首次运行（正常执行）
-  python tools/run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a
+# 首次运行（正常执行）
+python3 run.py --input_dir ./save_scenarios_3a --town 3a --scenario 3a --npc_total 20 --npc_car_ratio 0.50 --npc_cyclist_ratio 0.30
 
-  # 中断后恢复（跳过已完成的场景）
-  python tools/run.py --input_dir ./save_scenarios/ --town TOWN10HD_Opt --scenario 3a --resume
-
-  断点文件保存在 videos/{scenario}/{scenario}_checkpoint.pkl，与视频和结果文件在同一目录。
+# 中断后恢复（跳过已完成的场景）
+python3 run.py --input_dir ./save_scenarios_3a --town 3a --scenario 3a --npc_total 20 --npc_car_ratio 0.50 --npc_cyclist_ratio 0.30 --resume
 ```
+
+以上 3a 示例默认从 `videos/3a/3a_result.json` 读取恢复记录；若指定 `--video_dir`，则使用该输出根目录下的 `3a/3a_result.json`。

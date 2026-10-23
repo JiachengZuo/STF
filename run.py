@@ -1,3 +1,9 @@
+if __name__ == '__main__':
+    from stf_runner_dispatch import dispatch as _dispatch_stf
+    _stf_exit_code = _dispatch_stf()
+    if _stf_exit_code is not None:
+        raise SystemExit(_stf_exit_code)
+
 import carla
 import json
 import pygame

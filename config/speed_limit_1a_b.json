@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "map_name": "1a/Maps/1a/1a",
+  "opendrive_sha256": "12814f0e37a1fde43a7ee7debbf568e064a187aba4354102a4bb9006673bf748",
+  "corridor_id": "B_extended_eastbound",
+  "lane_sequence": [[152,-3],[917,-1],[94,-4],[1370,-1],[66,-3],[637,-1],[21,-3],[846,-1],[104,-4],[1169,-1],[164,-3],[1049,-1],[111,-3],[573,-1],[82,-3],[1184,-1],[83,-3],[969,-1],[140,-3],[1448,-1],[90,-3],[556,-1],[7,-4],[565,-1],[88,-3],[870,-1],[80,-3]],
+  "prepare_distance_m": 400,
+  "post_check_route_m": 200,
+  "release_check_distance_m": 200,
+  "route_sample_spacing_m": 2,
+  "minimum_event_junction_clearance_m": 5,
+  "minimum_route_end_remaining_m": 5,
+  "weather": {"cloudiness": 0, "precipitation": 0, "precipitation_deposits": 0, "wetness": 0, "fog_density": 0, "fog_distance": 100, "wind_intensity": 0, "sun_azimuth_angle": 120, "sun_altitude_angle": 45},
+  "cases": [
+    {"id":"1a_01","initial_limit_kmh":80,"restricted_limit_kmh":60,"restored_limit_kmh":80,"restricted_length_m":100},
+    {"id":"1a_02","initial_limit_kmh":80,"restricted_limit_kmh":60,"restored_limit_kmh":80,"restricted_length_m":200},
+    {"id":"1a_03","initial_limit_kmh":80,"restricted_limit_kmh":60,"restored_limit_kmh":80,"restricted_length_m":300},
+    {"id":"1a_04","initial_limit_kmh":60,"restricted_limit_kmh":40,"restored_limit_kmh":60,"restricted_length_m":100},
+    {"id":"1a_05","initial_limit_kmh":60,"restricted_limit_kmh":40,"restored_limit_kmh":60,"restricted_length_m":200},
+    {"id":"1a_06","initial_limit_kmh":60,"restricted_limit_kmh":40,"restored_limit_kmh":60,"restricted_length_m":300},
+    {"id":"1a_07","initial_limit_kmh":40,"restricted_limit_kmh":30,"restored_limit_kmh":null,"restricted_length_m":100},
+    {"id":"1a_08","initial_limit_kmh":40,"restricted_limit_kmh":30,"restored_limit_kmh":null,"restricted_length_m":300}
+  ]
+}
