@@ -1,0 +1,39 @@
+schema_version: 1
+host: 127.0.0.1
+port: 2000
+# CARLA resolves this asset name to its registered /Game/... map path.
+town: t_shaped_intersection_scene
+baseline_dir: save_scenarios/5e/baselines
+input_dir: save_scenarios/5e/definitions
+output_root: runs/curve_emergency_5e
+model_path: tcp/best_model.ckpt
+ego_blueprint: vehicle.tesla.model3
+ego_speed_kmh: 20.0
+# Engineering defaults, not GB/T or ISO pass thresholds.
+engineering:
+  fixed_delta_seconds: 0.05
+  # The saved 427 m route needs ~77 s at 20 km/h, plus crossing/yield time.
+  timeout_s: 120.0
+  camera_timeout_s: 2.0
+  stop_speed_mps: 0.15
+  stop_hold_s: 2.0
+  min_stop_gap_m: 0.5
+  max_stop_gap_m: 15.0
+  end_tolerance_m: 2.0
+  boundary_tolerance_m: 0.25
+  curve_window_m: 10.0
+  min_curve_angle_deg: 8.0
+  crossing_tolerance_m: 0.75
+  target_clearance_m: 1.0
+  target_timeout_s: 20.0
+  target_speed_tolerance_mps: 0.75
+  target_speed_grace_s: 1.0
+risks:
+  - {id: box, kind: static, blueprint: static.prop.box01, yaw_offset_deg: 0.0}
+  - {id: barrel, kind: static, blueprint: static.prop.barrel, yaw_offset_deg: 0.0}
+  - {id: plank, kind: static, blueprint: static.prop.ironplank, yaw_offset_deg: 90.0}
+  - {id: pedestrian, kind: walker, blueprint: walker.pedestrian.0001, speed_mps: 1.5}
+  - {id: bicycle, kind: vehicle, blueprint: vehicle.diamondback.century, speed_mps: 3.0}
+  - {id: motorcycle, kind: vehicle, blueprint: vehicle.kawasaki.ninja, speed_mps: 4.0}
+  - {id: car, kind: vehicle, blueprint: vehicle.tesla.model3, speed_mps: 4.0}
+  - {id: truck, kind: vehicle, blueprint: vehicle.carlamotors.carlacola, speed_mps: 4.0}

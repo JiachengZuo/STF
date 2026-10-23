@@ -1,0 +1,47 @@
+schema_version: 1
+host: 127.0.0.1
+port: 2000
+# null uses the current CARLA map in the editor; run uses the saved map.
+town: null
+baseline_dir: save_scenarios/6c/baselines
+input_dir: save_scenarios/6c/definitions_sprinter_20260925
+output_root: runs/station_stop_6c
+model_path: tcp/best_model.ckpt
+# Sprinter is used as an engineering proxy for a minibus.
+ego_blueprint: vehicle.mercedes.sprinter
+tcp_mode: hybrid
+editor:
+  # UI wall-clock deadline; the read-only RPC runs in a separate process.
+  ground_query_timeout_s: 5.0
+  ground_rpc_timeout_s: 2.0
+matrix:
+  initial_distances_m: [40, 50, 60, 70]
+  initial_speeds_kmh: [10, 20]
+  weather_catalog: all
+# Engineering screening only. These are NOT GB/T pass thresholds.
+evaluation:
+  scope: parking_only
+  timeout_s: 60.0
+  stop_speed_mps: 0.1
+  stop_confirm_s: 1.0
+  stop_drift_m: 0.05
+  hold_s: 2.0
+  longitudinal_tolerance_m: 0.5
+  lateral_tolerance_m: 0.2
+  heading_tolerance_deg: 5.0
+  reverse_speed_mps: 0.1
+  reverse_duration_s: 0.2
+  boundary_tolerance_m: 0.05
+engineering:
+  fixed_delta_seconds: 0.05
+  camera_timeout_s: 3.0
+  initial_position_tolerance_m: 0.75
+  initial_speed_tolerance_kmh: 1.0
+  initial_heading_tolerance_deg: 3.0
+  route_heading_tolerance_deg: 5.0
+  minimum_docking_length_m: 12.0
+  maximum_goal_offset_m: 4.0
+  # Acceleration/deceleration belong to the named reference parking controller.
+  reference_deceleration_mps2: 1.2
+  reference_cruise_kmh: 15.0
+  evidence_drain_s: 0.3

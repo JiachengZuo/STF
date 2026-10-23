@@ -1,0 +1,61 @@
+# GB/T 41798—2022 6.2.1 / 仓库编号2.a：隧道通行单次筛选配置
+#
+# 1. 先在CARLA中手动打开包含目标隧道的地图。
+# 2. editor模式会读取当前地图名，不自动搜索隧道。
+# 3. 路线P2为入口、P8为出口；如需其他编号，只修改下面两个值。
+# 4. 基准Ego在入口前，路线沿车道箭头绘制；逆向放点/保存会被拒绝。
+# 5. 三条顺向基准路线各展开0/-10/+10m三个spawn，先保存9条route，再叠加120种天气，共1080个场景。
+
+schema_version: 1
+
+environment:
+  conda_env: ""
+  # 留空时读取CARLA_UE4_ROOT或CARLA_0916_ROOT。
+  carla_root: ""
+
+connection:
+  host: 127.0.0.1
+  port: 2000
+  wait_timeout_s: 60
+  # 留空表示接受当前已打开地图；运行时仍严格核对JSON记录的地图名和OpenDRIVE哈希。
+  expected_map: ""
+
+editor:
+  save_dir: ./save_scenarios/2a/base_definitions
+  route_profile: tunnel_pass_through
+  # 与编辑器显示的P编号一致，采用1-based正整数。
+  entry_anchor_number: 2
+  exit_anchor_number: 8
+  scenario_timeout_s: 60.0
+  weather_profiles: all
+
+expansion:
+  mode: spawn_offsets
+  expected_baseline_count: 3
+  # 相对原始Ego：正数沿车道前移，负数后移；0保留原始spawn。
+  spawn_offsets_m: [0, -10, 10]
+  # 本批不使用替补位置，+10m必须仍在入口前且有至少5m接近余量。
+  fallback_offsets_m: []
+  # 第一阶段只保存路线和spawn，不含天气；第二阶段从此目录叠加天气。
+  route_output_dir: ./save_scenarios/2a/route_variants
+  # 可选离线路网；必须与JSON的OpenDRIVE哈希一致。留空则连接CARLA。
+  opendrive_path: ../2a/2a/Maps/2a/OpenDrive/2a.xodr
+  # 扩展后的接近段路线点间距，支持1至10m；洞内原始路线点保持不变。
+  route_spacing_m: 5.0
+
+runner:
+  input_dir: ./save_scenarios/2a/definitions
+  route_id: route_01
+  headless: true
+  resume: false
+  output_root: ./runs/tunnel_2a_screening
+  collision_config: null
+
+ads:
+  behavior:
+    description: repository EgoRouteFollowScene reference controller
+  tcp:
+    model_path: ./tcp/best_model.ckpt
+    require_cuda: false
+    # 等待当前仿真帧对应图像的墙钟秒数；超时记INVALID，不回退Behavior。
+    camera_frame_timeout_s: 2.0
