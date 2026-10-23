@@ -2,7 +2,7 @@
 
 Base: `JiachengZuo/STF` main, commit `f349089d64dc2c3fe953f55c4cb31cf125eec007`.
 
-The only change to an existing upstream file is a six-line entry hook at the beginning of `run.py`. Its original body remains byte-for-byte identical. Existing `scene.py`, `waypoints.py`, `model/tcp.py`, `roundabout_2b.py`, and `weather_catalog.py` remain unchanged.
+The only change to an existing upstream Python file is a six-line entry hook at the beginning of `run.py`. Its original body remains byte-for-byte identical. Existing `scene.py`, `waypoints.py`, `model/tcp.py`, `roundabout_2b.py`, and `weather_catalog.py` remain unchanged. The main [README](README.md) also corrects startup paths and documents configuration discovery, map selection, off-screen recording, and resume behavior.
 
 ## Choosing a runner
 
@@ -66,7 +66,7 @@ git apply --check /path/to/compatibility.patch
 git apply /path/to/compatibility.patch
 ```
 
-The patch contains additions and the `run.py` entry hook; it does not remove files. If the checkout has advanced or has conflicting local additions, review those conflicts rather than replacing files wholesale. The accompanying manifest records the exact base, file hashes, and checks.
+The original compatibility patch contains additions and the `run.py` entry hook; it does not remove files. The branch also includes a follow-up documentation correction. If the checkout has advanced or has conflicting local additions, review those conflicts rather than replacing files wholesale. The accompanying manifest records the exact base, file hashes, and checks.
 
 ## Verification
 
