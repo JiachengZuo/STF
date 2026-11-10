@@ -469,51 +469,123 @@ def _safe_destroy(obj):
 
 
 def spawn_traffic_npcs(world, client, total_npcs=0, car_ratio=0.5,
-                       cyclist_ratio=0.3):
-    """Spawn optional Traffic Manager vehicles and AI walkers for one attempt."""
+                       cyclist_ratio=0.3, ego_location=None,
+                       spawn_radius=(30.0, 100.0),
+                       min_ego_distance=15.0):
+    """Spawn Traffic Manager vehicles, cyclists and walkers around the ego vehicle.
+
+    Args:
+        world, client: CARLA world and client handles.
+        total_npcs:      total number of NPC actors to request.
+        car_ratio:       fraction of NPCs that are cars.
+        cyclist_ratio:   fraction of NPCs that are cyclists (bicycle/motorcycle).
+        ego_location:    carla.Location of the ego vehicle.  If None, falls back
+                         to map-wide spawning (original behaviour).
+        spawn_radius:    (min_m, max_m) — NPCs placed within this distance of ego.
+        min_ego_distance: NPCs must be at least this far from ego at spawn to
+                          avoid immediate collisions.
+
+    Returns:
+        actors: list of spawned CARLA actors.
+    """
     if total_npcs <= 0:
         return []
     if car_ratio < 0.0 or cyclist_ratio < 0.0 or car_ratio + cyclist_ratio > 1.0:
         raise ValueError("NPC ratios must be non-negative and sum to at most 1.0")
 
     blueprint_library = world.get_blueprint_library()
-    spawn_points = list(world.get_map().get_spawn_points())
-    random.shuffle(spawn_points)
-    if not spawn_points:
-        raise RuntimeError("CARLA map has no vehicle spawn points for NPC traffic")
+    carla_map = world.get_map()
 
     car_count = int(total_npcs * car_ratio)
     cyclist_count = int(total_npcs * cyclist_ratio)
     pedestrian_count = total_npcs - car_count - cyclist_count
     actors = []
     vehicles = []
+
+    # --- Blueprint filters ---
     car_blueprints = [
-        blueprint for blueprint in blueprint_library.filter("vehicle.*")
-        if all(token not in blueprint.id for token in (
+        bp for bp in blueprint_library.filter("vehicle.*")
+        if all(token not in bp.id for token in (
             "bicycle", "motorcycle", "ambulance", "firetruck"))
     ]
     cyclist_blueprints = [
-        blueprint for blueprint in blueprint_library.filter("vehicle.*")
-        if "bicycle" in blueprint.id or "motorcycle" in blueprint.id
+        bp for bp in blueprint_library.filter("vehicle.*")
+        if "crossbike" in bp.id or "motorcycle" in bp.id
     ]
+    walker_blueprints = list(blueprint_library.filter("walker.pedestrian.*"))
 
+    # --- Build candidate spawn transforms around ego ---
+    radius_min, radius_max = spawn_radius
+    vehicle_spawn_candidates = []  # list of carla.Transform
+    walker_spawn_candidates = []
+
+    map_spawn_points = list(carla_map.get_spawn_points())
+    if not map_spawn_points:
+        print("⚠️  Map has zero spawn points — cannot spawn vehicles/cyclists")
+
+    if ego_location is not None:
+        # Partition spawn points: near vs far, both shuffled
+        near_points, far_points = [], []
+        for sp in map_spawn_points:
+            dist = ego_location.distance(sp.location)
+            if radius_min <= dist <= radius_max:
+                near_points.append(sp)
+            else:
+                far_points.append(sp)
+        random.shuffle(near_points)
+        random.shuffle(far_points)
+        # Near first, then far — so near ones are exhausted before skip
+        vehicle_spawn_candidates = near_points + far_points
+
+        if not near_points:
+            print("⚠️  No map spawn points within {}–{} m of ego; "
+                  "using distant fallback points".format(radius_min, radius_max))
+
+        # For pedestrians, sample navigation points near ego
+        for _ in range(max(50, pedestrian_count * 3)):
+            nav_loc = world.get_random_location_from_navigation()
+            if nav_loc is None:
+                continue
+            dist = ego_location.distance(nav_loc)
+            if radius_min <= dist <= radius_max \
+                    and dist >= min_ego_distance:
+                walker_spawn_candidates.append(nav_loc)
+        random.shuffle(walker_spawn_candidates)
+    else:
+        # No ego location given — use all map points (original behaviour)
+        random.shuffle(map_spawn_points)
+        vehicle_spawn_candidates = map_spawn_points
+
+    # --- Spawn cars and cyclists ---
     requested_vehicles = (
         [("car", car_blueprints)] * car_count
         + [("cyclist", cyclist_blueprints)] * cyclist_count)
     for index, (kind, choices) in enumerate(requested_vehicles):
-        if index >= len(spawn_points) or not choices:
-            print("⚠️ NPC {} skipped: no blueprint/spawn point".format(kind))
+        if not choices:
+            print("⚠️  NPC {} skipped: no blueprint available".format(kind))
+            continue
+        if index >= len(vehicle_spawn_candidates):
+            print("⚠️  NPC {} skipped: no more spawn points ({}/{})"
+                  .format(kind, len(requested_vehicles), len(vehicle_spawn_candidates)))
             continue
         blueprint = random.choice(choices)
         if blueprint.has_attribute("color"):
             colors = blueprint.get_attribute("color").recommended_values
             if colors:
                 blueprint.set_attribute("color", random.choice(colors))
-        actor = world.try_spawn_actor(blueprint, spawn_points[index])
+
+        transform = vehicle_spawn_candidates[index]
+        # Enforce minimum distance from ego
+        if ego_location is not None:
+            if ego_location.distance(transform.location) < min_ego_distance:
+                continue
+
+        actor = world.try_spawn_actor(blueprint, transform)
         if actor is not None:
             vehicles.append(actor)
             actors.append(actor)
 
+    # --- Traffic Manager ---
     if vehicles:
         traffic_manager = client.get_trafficmanager()
         traffic_manager.set_synchronous_mode(True)
@@ -523,12 +595,15 @@ def spawn_traffic_npcs(world, client, total_npcs=0, car_ratio=0.5,
             traffic_manager.vehicle_percentage_speed_difference(
                 vehicle, random.uniform(-20.0, 20.0))
 
-    walker_blueprints = list(
-        blueprint_library.filter("walker.pedestrian.*"))
-    for _ in range(pedestrian_count):
+    # --- Spawn pedestrians around ego ---
+    for idx in range(pedestrian_count):
         if not walker_blueprints:
             break
-        location = world.get_random_location_from_navigation()
+        # Use precomputed nearby locations when possible; fall back to global
+        if idx < len(walker_spawn_candidates):
+            location = walker_spawn_candidates[idx]
+        else:
+            location = world.get_random_location_from_navigation()
         if location is None:
             continue
         walker = world.try_spawn_actor(
@@ -548,8 +623,10 @@ def spawn_traffic_npcs(world, client, total_npcs=0, car_ratio=0.5,
             controller.go_to_location(destination)
         controller.set_max_speed(1.4 + random.random() * 0.6)
 
-    print("🏙️ NPC traffic: requested={}, spawned={}".format(
-        total_npcs, len(actors)))
+    print("🏙️  NPC traffic: requested={}, spawned={} "
+          "(around ego: {}–{} m, min_clear={} m)".format(
+              total_npcs, len(actors),
+              radius_min, radius_max, min_ego_distance))
     return actors
 
 
@@ -767,7 +844,8 @@ def _run_roundabout_attempt(
             client, world, cfg_path, town, route_id, model, model_path)
         scene.spawn()
         npc_actors = spawn_traffic_npcs(
-            world, client, npc_total, npc_car_ratio, npc_cyclist_ratio)
+            world, client, npc_total, npc_car_ratio, npc_cyclist_ratio,
+            ego_location=scene.ego.get_location())
         spawn_complete = True
 
         def on_collision(event):
@@ -1094,6 +1172,9 @@ def main():
                         help='Skip scenarios that already have durable results')
     parser.add_argument('--max_scenario_time', type=float, default=120.0,
                         help='Maximum wall-clock seconds per scenario (default: 120)')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Override reproducibility trial_seed for deterministic '
+                             'NPC/obstacle/ego random placement')
 
     parser.add_argument(
         '--headless', action='store_true',
@@ -1257,6 +1338,11 @@ def main():
         "runtime_environment": runtime_environment,
     }
 
+    # If user provided --seed, apply once globally so each scenario gets a
+    # different slice of the sequence instead of restarting from the same state.
+    if args.seed is not None:
+        apply_reproducible_seed(args.seed, client)
+
     pending_attempts = [
         (idx, cfg_path, 1) for idx, cfg_path in enumerate(scenario_files)]
     shutdown_requested = False
@@ -1287,14 +1373,16 @@ def main():
         generation = scenario_config.get("roundabout_test", {}).get(
             "generation", {})
         trial_seed = reproducibility.get("trial_seed")
-        if args.screening and trial_seed is None:
-            base_seed = generation.get("base_seed", 41798)
-            trial_seed = int(canonical_hash({
-                "base_seed": base_seed,
-                "config_sha256": config_sha256,
-                "mode": "screening",
-            })[:8], 16)
-        apply_reproducible_seed(trial_seed, client)
+        # If --seed was already applied globally, skip re-seeding here
+        if args.seed is None:
+            if args.screening and trial_seed is None:
+                base_seed = generation.get("base_seed", 41798)
+                trial_seed = int(canonical_hash({
+                    "base_seed": base_seed,
+                    "config_sha256": config_sha256,
+                    "mode": "screening",
+                })[:8], 16)
+            apply_reproducible_seed(trial_seed, client)
 
         # ======================
         # ✅ 自动加载天气（关键行）
@@ -1377,7 +1465,8 @@ def main():
             scene.spawn()
             npc_actors = spawn_traffic_npcs(
                 world, client, args.npc_total,
-                args.npc_car_ratio, args.npc_cyclist_ratio)
+                args.npc_car_ratio, args.npc_cyclist_ratio,
+                ego_location=scene.ego.get_location())
         except Exception as e:
             print(f"❌ Spawn failed: {e}")
             failed_record = {

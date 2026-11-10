@@ -1,6 +1,7 @@
 import math
 import json
 import copy
+import random
 import carla
 import weakref
 import time
@@ -2078,13 +2079,43 @@ class BicycleCrossScene(BaseScene):
 # 停车起步场景（标准化 + TCP）
 # ============================
 class CarStopandGoScene(BaseScene):
+    @staticmethod
+    def _build_pools(bp_lib):
+        car = [b for b in bp_lib.filter('vehicle.*')
+               if all(t not in b.id for t in ('bicycle','motorcycle','ambulance','firetruck'))]
+        cyc = [b for b in bp_lib.filter('vehicle.*')
+               if 'crossbike' in b.id or 'motorcycle' in b.id]
+        wlk = list(bp_lib.filter('walker.pedestrian.*'))
+        stc = list(bp_lib.filter('static.prop.*'))
+        pools = []
+        if car: pools.append(('car', car, 0.35, 'vehicle'))
+        if cyc: pools.append(('cyclist', cyc, 0.20, 'vehicle'))
+        # if wlk: pools.append(('walker', wlk, 0.25, 'walker'))
+        if stc: pools.append(('static_prop', stc, 0.20, 'static'))
+        if not pools: pools.append(('car', list(bp_lib.filter('vehicle.*')), 1.0, 'vehicle'))
+        return pools
+
+    @classmethod
+    def _pick_random(cls, bp_lib):
+        pools = cls._build_pools(bp_lib)
+        cats, bps, weights, kinds = zip(*pools)
+        r = random.random() * sum(weights)
+        a = 0.0
+        for i, w in enumerate(weights):
+            a += w
+            if r <= a:
+                return cats[i], random.choice(bps[i]), kinds[i]
+        return cats[-1], random.choice(bps[-1]), kinds[-1]
+
     def __init__(self, client, world, config_path, town, route_id, model, model_path=None):
         super().__init__(client, world, config_path, town, route_id)
         self.world = world
-        self.cars = []
-        self.car_ctrls = []
+        # self.obstacles: (actor, cat, kind, direction, controller_or_None)
+        #   kind: 'vehicle'=VehicleControl, 'walker'=AI ctrl, 'static'=noop
+        self.obstacles = []
         self.triggered = False
         self.trigger_time = 0
+        self._walker_frozen = False
         self.ego = self.spawn_ego()
 
         self.model = model
@@ -2115,19 +2146,45 @@ class CarStopandGoScene(BaseScene):
             self.world.tick()
 
         bp_lib = self.world.get_blueprint_library()
+        pools = self._build_pools(bp_lib)
+        print(f"  pools: {[(c, len(b), k) for c, b, _, k in pools]}")
         for cfg in self.config['other_actors']['center']:
             x = float(cfg['transform']['x'])
             y = float(cfg['transform']['y'])
             z = float(cfg['transform']['z'])
             yaw = float(cfg['transform']['yaw'])
-            wbp = bp_lib.find('vehicle.tesla.model3')
-            tf = carla.Transform(carla.Location(x, y, z), carla.Rotation(yaw=yaw))
-            car = self.world.try_spawn_actor(wbp, tf)
-            if car:
-                self.cars.append(car)
-                self.actors.append(car)
-                angle = math.radians(yaw)
-                self.car_ctrls.append((math.cos(angle), math.sin(angle)))
+            if math.isnan(x) or math.isnan(y) or math.isnan(z) or math.isnan(yaw):
+                continue
+            direction = (math.cos(math.radians(yaw)), math.sin(math.radians(yaw)))
+            for _ in range(20):
+                cat, bp, kind = self._pick_random(bp_lib)
+                ox = random.uniform(-1.5, 1.5)
+                oy = random.uniform(-1.5, 1.5)
+                tf = carla.Transform(
+                    carla.Location(x + ox, y + oy, z),
+                    carla.Rotation(yaw=yaw))
+                actor = self.world.try_spawn_actor(bp, tf)
+                if actor:
+                    ctrl = None
+                    if kind == 'walker':
+                        ctrl_bp = bp_lib.find('controller.ai.walker')
+                        if ctrl_bp:
+                            ctrl = self.world.try_spawn_actor(
+                                ctrl_bp, actor.get_transform(),
+                                attach_to=actor)
+                            if ctrl:
+                                self.world.tick()
+                                ctrl.start()
+                                ctrl.go_to_location(carla.Location(
+                                    x=x + ox + direction[0] * 10,
+                                    y=y + oy + direction[1] * 10, z=z))
+                                self.actors.append(ctrl)
+                    self.obstacles.append((actor, cat, kind, direction, ctrl))
+                    self.actors.append(actor)
+                    print(f"  [OK] {actor.type_id} [{cat}] kind={kind}")
+                    break
+            else:
+                print(f"  [FAIL] ({x:.1f},{y:.1f}) after 20 retries")
 
     def spawn_camera(self):
         bp_lib = self.world.get_blueprint_library()
@@ -2182,16 +2239,36 @@ class CarStopandGoScene(BaseScene):
 
         if self.triggered:
             elapsed = time.time() - self.trigger_time
-            for w, (dx, dy) in zip(self.cars, self.car_ctrls):
-                control = carla.VehicleControl()
-                if elapsed < 2.0:
-                    control.throttle = 0.0
-                    control.brake = 1.0
-                else:
-                    control.throttle = min(1.0, adj_throttle * boost)
-                    control.steer = 0.0
-                    control.brake = 0.0
-                w.apply_control(control)
+            # Freeze walkers once
+            if not self._walker_frozen and elapsed < 2.0:
+                for _, _, kind, _, ctrl in self.obstacles:
+                    if kind == 'walker' and ctrl:
+                        ctrl.stop()
+                self._walker_frozen = True
+            # Resume walkers once
+            if self._walker_frozen and elapsed >= 2.0:
+                for actor, _, kind, direction, ctrl in self.obstacles:
+                    if kind == 'walker' and ctrl:
+                        ctrl.start()
+                        self.world.tick()
+                        loc = actor.get_location()
+                        ctrl.go_to_location(carla.Location(
+                            x=loc.x + direction[0] * 10,
+                            y=loc.y + direction[1] * 10, z=loc.z))
+                self._walker_frozen = False
+
+            for actor, _, kind, direction, ctrl in self.obstacles:
+                if kind == 'vehicle':
+                    c = carla.VehicleControl()
+                    if elapsed < 2.0:
+                        c.throttle = 0.0
+                        c.brake = 1.0
+                    else:
+                        c.throttle = min(1.0, adj_throttle * boost)
+                        c.steer = 0.0
+                        c.brake = 0.0
+                    actor.apply_control(c)
+                # walker / static: no VehicleControl
 
         if self.triggered and time.time() - self.trigger_time > timeout:
             return False

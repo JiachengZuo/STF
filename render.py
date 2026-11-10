@@ -251,6 +251,9 @@ class MapImage(object):
     def world_to_pixel(self, location, offset=(0, 0)):
         x = self.scale * self._pixels_per_meter * (location.x - self._world_offset[0])
         y = self.scale * self._pixels_per_meter * (location.y - self._world_offset[1])
+        # guard against NaN coordinates from invalid actor locations
+        if math.isnan(x) or math.isnan(y):
+            return [0, 0]
         return [int(x - offset[0]), int(y - offset[1])]
 
     def world_to_pixel_width(self, width):
