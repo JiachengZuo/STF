@@ -1,6 +1,7 @@
 import math
 import json
 import copy
+import random
 import carla
 import weakref
 import time
@@ -602,11 +603,54 @@ class CarOncomingPassScene(BaseScene):
             self.world.tick()
 
         bp_lib = self.world.get_blueprint_library()
+        ego_loc = self.ego.get_location()
+
         for cfg in self.config['other_actors']['center']:
             x = float(cfg['transform']['x'])
             y = float(cfg['transform']['y'])
             z = float(cfg['transform']['z'])
             yaw = float(cfg['transform']['yaw'])
+
+            # 将NPC位置向对向车道（ego车道）偏移，侵占对向车道20%-50%
+            # 先走半个车道到中心线(0.5)，再侵入对向车道20%-50%(0.2-0.5)
+            npc_loc = carla.Location(x, y, z)
+            wp = self.map.get_waypoint(npc_loc, project_to_road=True)
+            encroach_ratio = random.uniform(0.7, 1.0)
+
+            if wp:
+                lane_w = wp.lane_width
+
+                # 用ego到NPC的几何方向计算偏移（不受车道waypoint朝向影响）
+                to_ego_x = ego_loc.x - npc_loc.x
+                to_ego_y = ego_loc.y - npc_loc.y
+                dist_to_ego = math.sqrt(to_ego_x**2 + to_ego_y**2)
+                if dist_to_ego > 0.01:
+                    # ego方向的单位向量
+                    dir_to_ego_x = to_ego_x / dist_to_ego
+                    dir_to_ego_y = to_ego_y / dist_to_ego
+
+                    # 计算NPC前进方向
+                    npc_yaw_rad = math.radians(yaw)
+                    npc_forward_x = math.cos(npc_yaw_rad)
+                    npc_forward_y = math.sin(npc_yaw_rad)
+
+                    # 侧向方向 = forward方向叉积向上(0,0,1)，右转为正
+                    right_x = npc_forward_y       # cos(yaw+90) = -sin(yaw) 的负方向 = sin(yaw)
+                    right_y = -npc_forward_x       # sin(yaw+90) = cos(yaw) 的负方向 = -cos(yaw)
+
+                    # 判断ego在NPC前进方向的右侧还是左侧
+                    dot_right = right_x * dir_to_ego_x + right_y * dir_to_ego_y
+                    shift_dir = 1.0 if dot_right > 0.0 else -1.0
+
+                    shift_amount = lane_w * encroach_ratio * shift_dir
+
+                    # 沿NPC侧向偏移，而不是沿车道waypoint侧向
+                    x += right_x * shift_amount
+                    y += right_y * shift_amount
+                    # encroach_ratio 已包含 0.5(到中心线) + 侵入量, 所以侵入对向车道比例 = (ratio - 0.5)*100%
+                    actual_encroach = (encroach_ratio - 0.5) * 100
+                    print(f"[4c NPC] 偏移 {abs(shift_amount):.2f}m, 侵入对向车道约 {actual_encroach:.0f}%")
+
             car_bp = bp_lib.find('vehicle.tesla.model3')
             tf = carla.Transform(carla.Location(x, y, z), carla.Rotation(yaw=yaw))
             car = self.world.try_spawn_actor(car_bp, tf)
@@ -666,144 +710,18 @@ class CarOncomingPassScene(BaseScene):
             if self.ego.get_location().distance(trig_loc) < adj_trigger:
                 self.triggered = True
                 self.trigger_time = time.time()
-                # 固定每辆NPC的借道方向和初始车道lane_id（从NPC自身waypoint视角）
-                for idx, car in enumerate(self.cars):
-                    if not car.is_alive:
-                        continue
-                    car_wp = self.map.get_waypoint(car.get_location(), project_to_road=True)
-                    if car_wp:
-                        self.original_lane_ids[idx] = car_wp.lane_id
-
-                        # 用几何方法确定借道方向（ego在NPC的左侧还是右侧）
-                        # 避免单车道双向路上get_left_lane/get_right_lane都返回None
-                        wp_tf = car_wp.transform
-                        right_vec = wp_tf.get_right_vector()
-                        ego_loc = self.ego.get_location()
-                        car_loc = car.get_location()
-                        to_ego_x = ego_loc.x - car_loc.x
-                        to_ego_y = ego_loc.y - car_loc.y
-                        dot = right_vec.x * to_ego_x + right_vec.y * to_ego_y
-                        if dot > 0.5:
-                            self.cut_direction[idx] = 1   # ego在NPC右侧，向右借道
-                        elif dot < -0.5:
-                            self.cut_direction[idx] = -1  # ego在NPC左侧，向左借道
-                        else:
-                            # 夹角判断法兜底：用NPC朝向的侧向偏角
-                            forward_vec = wp_tf.get_forward_vector()
-                            # ego在NPC左侧：right_vec与to_ego叉积为负
-                            cross = forward_vec.x * to_ego_y - forward_vec.y * to_ego_x
-                            self.cut_direction[idx] = 1 if cross < 0 else -1
-                    else:
-                        self.cut_direction[idx] = 0
-                    self.state[idx] = 1
+                print("[4c] 触发: NPC对向车已侵占对向车道20%-50%，直行通过")
 
         if self.triggered:
-            for idx, car in enumerate(self.cars):
+            # NPC已预先摆放在侵占对向车道20%-50%的位置，沿自身朝向直线行驶，无需拐弯
+            # 不使用 _get_lane_follow_steer（它会跟随车道waypoints导致NPC转回原车道）
+            for car in self.cars:
                 if not car.is_alive:
                     continue
                 control = carla.VehicleControl()
                 control.throttle = min(0.3, adj_throttle * boost)
                 control.brake = 0.0
-                car_wp = self.map.get_waypoint(car.get_location(), project_to_road=True)
-
-                if self.state[idx] == 1:
-                    # Phase 1: 朝ego前方的waypoints借道
-                    ego_wp = self.map.get_waypoint(self.ego.get_location(), project_to_road=True)
-                    if ego_wp:
-                        # 取ego前方车道相邻侧的车道（借道方向），获取其前方waypoints
-                        if self.cut_direction[idx] == 1:
-                            side_wp = ego_wp.get_right_lane()
-                        else:
-                            side_wp = ego_wp.get_left_lane()
-                        if side_wp and side_wp.lane_type == carla.LaneType.Driving:
-                            ahead = side_wp.next(10.0)
-                            if not ahead:
-                                ahead = side_wp.next(5.0)
-                        else:
-                            # fallback: ego当前车道前方的waypoints
-                            ahead = ego_wp.next(10.0)
-                            if not ahead:
-                                ahead = ego_wp.next(5.0)
-                        if ahead:
-                            control.steer = self._steer_to_target(car, ahead[0].transform.location)
-                        else:
-                            control.steer = 0.15 * self.cut_direction[idx]
-                    else:
-                        control.steer = 0.15 * self.cut_direction[idx]
-
-                    # lane_id变化 = 已进入借道车道
-                    if car_wp and self.original_lane_ids[idx] != 0 and car_wp.lane_id != self.original_lane_ids[idx]:
-                        self.state[idx] = 2
-
-                elif self.state[idx] == 2:
-                    # Phase 2: 在借道车道直行（steer=0，因为借道车道方向和NPC行驶方向相反，不能用lane follow）
-                    control.steer = 0.0
-                    if time.time() - self.trigger_time > 1:
-                        self.state[idx] = 3
-
-                elif self.state[idx] == 3:
-                    # Phase 3: 快速返回原始车道
-                    if car_wp and self.original_lane_ids[idx] != 0:
-                        if car_wp.lane_id == self.original_lane_ids[idx]:
-                            self.state[idx] = 4
-                        else:
-                            return_wp = None
-
-                            # 先尝试从NPC当前位置的相邻车道中找lane_id匹配的原车道
-                            # (用于同方向多车道场景)
-                            right = car_wp.get_right_lane()
-                            left = car_wp.get_left_lane()
-                            if right and right.lane_id == self.original_lane_ids[idx]:
-                                return_wp = right
-                            elif left and left.lane_id == self.original_lane_ids[idx]:
-                                return_wp = left
-
-                            if return_wp:
-                                ahead = return_wp.next(8.0)
-                                if not ahead:
-                                    ahead = return_wp.next(4.0)
-                                if ahead:
-                                    control.steer = self._steer_to_target(car, ahead[0].transform.location, 0.5)
-                                else:
-                                    control.steer = -0.6 * self.cut_direction[idx]
-                            else:
-                                # 跨中心线场景：从NPC自身朝向前方计算返回目标点
-                                # lane_width取car_wp的宽度，在NPC前进方向基础上横向偏移
-                                trans = car.get_transform()
-                                yaw_rad = math.radians(trans.rotation.yaw)
-                                lane_w = car_wp.lane_width
-                                # 前进方向6m + 横向偏移（返回方向）一个车道宽
-                                fwd_x = trans.location.x + 6.0 * math.cos(yaw_rad)
-                                fwd_y = trans.location.y + 6.0 * math.sin(yaw_rad)
-                                # 返回方向：与借道方向相反，即 -cut_direction
-                                return_dir = -self.cut_direction[idx]
-                                lat_x = return_dir * lane_w * math.cos(yaw_rad + math.pi / 2)
-                                lat_y = return_dir * lane_w * math.sin(yaw_rad + math.pi / 2)
-                                target_loc = carla.Location(fwd_x + lat_x, fwd_y + lat_y, trans.location.z)
-                                control.steer = self._steer_to_target(car, target_loc, 0.5)
-                    else:
-                        control.steer = -0.6 * self.cut_direction[idx]
-
-                    if time.time() - self.trigger_time > 5.0:
-                        self.state[idx] = 4
-
-                elif self.state[idx] == 4:
-                    # Phase 4: 回到原车道后沿waypoints行驶
-                    if car_wp and car_wp.lane_id == self.original_lane_ids[idx]:
-                        control.steer = self._get_lane_follow_steer(car)
-                    else:
-                        # 尚未回到原车道，继续用横向偏移方式引导返回
-                        trans = car.get_transform()
-                        yaw_rad = math.radians(trans.rotation.yaw)
-                        lane_w = car_wp.lane_width if car_wp else 3.5
-                        fwd_x = trans.location.x + 8.0 * math.cos(yaw_rad)
-                        fwd_y = trans.location.y + 8.0 * math.sin(yaw_rad)
-                        return_dir = -self.cut_direction[idx]
-                        lat_x = return_dir * lane_w * math.cos(yaw_rad + math.pi / 2)
-                        lat_y = return_dir * lane_w * math.sin(yaw_rad + math.pi / 2)
-                        target_loc = carla.Location(fwd_x + lat_x, fwd_y + lat_y, trans.location.z)
-                        control.steer = self._steer_to_target(car, target_loc, 0.5)
-
+                control.steer = 0.0  # 直行，不跟随车道转向
                 car.apply_control(control)
 
         if self.triggered and time.time() - self.trigger_time > timeout:
@@ -2078,13 +1996,43 @@ class BicycleCrossScene(BaseScene):
 # 停车起步场景（标准化 + TCP）
 # ============================
 class CarStopandGoScene(BaseScene):
+    @staticmethod
+    def _build_pools(bp_lib):
+        car = [b for b in bp_lib.filter('vehicle.*')
+               if all(t not in b.id for t in ('bicycle','motorcycle','ambulance','firetruck'))]
+        cyc = [b for b in bp_lib.filter('vehicle.*')
+               if 'crossbike' in b.id or 'motorcycle' in b.id]
+        wlk = list(bp_lib.filter('walker.pedestrian.*'))
+        stc = list(bp_lib.filter('static.prop.*'))
+        pools = []
+        if car: pools.append(('car', car, 0.35, 'vehicle'))
+        if cyc: pools.append(('cyclist', cyc, 0.20, 'vehicle'))
+        # if wlk: pools.append(('walker', wlk, 0.25, 'walker'))
+        if stc: pools.append(('static_prop', stc, 0.20, 'static'))
+        if not pools: pools.append(('car', list(bp_lib.filter('vehicle.*')), 1.0, 'vehicle'))
+        return pools
+
+    @classmethod
+    def _pick_random(cls, bp_lib):
+        pools = cls._build_pools(bp_lib)
+        cats, bps, weights, kinds = zip(*pools)
+        r = random.random() * sum(weights)
+        a = 0.0
+        for i, w in enumerate(weights):
+            a += w
+            if r <= a:
+                return cats[i], random.choice(bps[i]), kinds[i]
+        return cats[-1], random.choice(bps[-1]), kinds[-1]
+
     def __init__(self, client, world, config_path, town, route_id, model, model_path=None):
         super().__init__(client, world, config_path, town, route_id)
         self.world = world
-        self.cars = []
-        self.car_ctrls = []
+        # self.obstacles: (actor, cat, kind, direction, controller_or_None)
+        #   kind: 'vehicle'=VehicleControl, 'walker'=AI ctrl, 'static'=noop
+        self.obstacles = []
         self.triggered = False
         self.trigger_time = 0
+        self._walker_frozen = False
         self.ego = self.spawn_ego()
 
         self.model = model
@@ -2115,19 +2063,45 @@ class CarStopandGoScene(BaseScene):
             self.world.tick()
 
         bp_lib = self.world.get_blueprint_library()
+        pools = self._build_pools(bp_lib)
+        print(f"  pools: {[(c, len(b), k) for c, b, _, k in pools]}")
         for cfg in self.config['other_actors']['center']:
             x = float(cfg['transform']['x'])
             y = float(cfg['transform']['y'])
             z = float(cfg['transform']['z'])
             yaw = float(cfg['transform']['yaw'])
-            wbp = bp_lib.find('vehicle.tesla.model3')
-            tf = carla.Transform(carla.Location(x, y, z), carla.Rotation(yaw=yaw))
-            car = self.world.try_spawn_actor(wbp, tf)
-            if car:
-                self.cars.append(car)
-                self.actors.append(car)
-                angle = math.radians(yaw)
-                self.car_ctrls.append((math.cos(angle), math.sin(angle)))
+            if math.isnan(x) or math.isnan(y) or math.isnan(z) or math.isnan(yaw):
+                continue
+            direction = (math.cos(math.radians(yaw)), math.sin(math.radians(yaw)))
+            for _ in range(20):
+                cat, bp, kind = self._pick_random(bp_lib)
+                ox = random.uniform(-1.5, 1.5)
+                oy = random.uniform(-1.5, 1.5)
+                tf = carla.Transform(
+                    carla.Location(x + ox, y + oy, z),
+                    carla.Rotation(yaw=yaw))
+                actor = self.world.try_spawn_actor(bp, tf)
+                if actor:
+                    ctrl = None
+                    if kind == 'walker':
+                        ctrl_bp = bp_lib.find('controller.ai.walker')
+                        if ctrl_bp:
+                            ctrl = self.world.try_spawn_actor(
+                                ctrl_bp, actor.get_transform(),
+                                attach_to=actor)
+                            if ctrl:
+                                self.world.tick()
+                                ctrl.start()
+                                ctrl.go_to_location(carla.Location(
+                                    x=x + ox + direction[0] * 10,
+                                    y=y + oy + direction[1] * 10, z=z))
+                                self.actors.append(ctrl)
+                    self.obstacles.append((actor, cat, kind, direction, ctrl))
+                    self.actors.append(actor)
+                    print(f"  [OK] {actor.type_id} [{cat}] kind={kind}")
+                    break
+            else:
+                print(f"  [FAIL] ({x:.1f},{y:.1f}) after 20 retries")
 
     def spawn_camera(self):
         bp_lib = self.world.get_blueprint_library()
@@ -2182,16 +2156,36 @@ class CarStopandGoScene(BaseScene):
 
         if self.triggered:
             elapsed = time.time() - self.trigger_time
-            for w, (dx, dy) in zip(self.cars, self.car_ctrls):
-                control = carla.VehicleControl()
-                if elapsed < 2.0:
-                    control.throttle = 0.0
-                    control.brake = 1.0
-                else:
-                    control.throttle = min(1.0, adj_throttle * boost)
-                    control.steer = 0.0
-                    control.brake = 0.0
-                w.apply_control(control)
+            # Freeze walkers once
+            if not self._walker_frozen and elapsed < 2.0:
+                for _, _, kind, _, ctrl in self.obstacles:
+                    if kind == 'walker' and ctrl:
+                        ctrl.stop()
+                self._walker_frozen = True
+            # Resume walkers once
+            if self._walker_frozen and elapsed >= 2.0:
+                for actor, _, kind, direction, ctrl in self.obstacles:
+                    if kind == 'walker' and ctrl:
+                        ctrl.start()
+                        self.world.tick()
+                        loc = actor.get_location()
+                        ctrl.go_to_location(carla.Location(
+                            x=loc.x + direction[0] * 10,
+                            y=loc.y + direction[1] * 10, z=loc.z))
+                self._walker_frozen = False
+
+            for actor, _, kind, direction, ctrl in self.obstacles:
+                if kind == 'vehicle':
+                    c = carla.VehicleControl()
+                    if elapsed < 2.0:
+                        c.throttle = 0.0
+                        c.brake = 1.0
+                    else:
+                        c.throttle = min(1.0, adj_throttle * boost)
+                        c.steer = 0.0
+                        c.brake = 0.0
+                    actor.apply_control(c)
+                # walker / static: no VehicleControl
 
         if self.triggered and time.time() - self.trigger_time > timeout:
             return False
